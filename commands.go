@@ -11,7 +11,7 @@ import (
 type options struct{ command, server, token, id, email, password, caCert string }
 
 func usage(out io.Writer) {
-	fmt.Fprintln(out, "Usage: grimcli <login|match|catalogue> [flags]\nUse grimcli <command> --help for command flags.")
+	fmt.Fprintln(out, "Usage: grimcli <login|match|catalogue|matches|lobbies> [flags]\nUse grimcli <command> --help for command flags.")
 }
 
 func parse(args []string, diagnostics io.Writer) (o options, help bool, err error) {
@@ -24,7 +24,7 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 		return o, true, nil
 	}
 	o.command = args[0]
-	if o.command != "login" && o.command != "match" && o.command != "catalogue" {
+	if o.command != "login" && o.command != "match" && o.command != "catalogue" && o.command != "matches" && o.command != "lobbies" {
 		return o, false, fmt.Errorf("unknown command %q", o.command)
 	}
 	flags := flag.NewFlagSet(o.command, flag.ContinueOnError)
@@ -38,7 +38,9 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 		flags.StringVar(&o.password, "password", "", "Required password")
 	} else {
 		flags.StringVar(&o.token, "token", "", "Required raw login token")
-		flags.StringVar(&o.id, "id", "", "Required match ID")
+		if o.command == "match" || o.command == "catalogue" {
+			flags.StringVar(&o.id, "id", "", "Required match ID")
+		}
 	}
 	if err = flags.Parse(args[1:]); err != nil {
 		if err == flag.ErrHelp {
@@ -66,8 +68,13 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 		if o.email == "" || o.password == "" {
 			return o, false, fmt.Errorf("--email and --password are required")
 		}
-	} else if strings.TrimSpace(o.token) == "" || o.id == "" {
-		return o, false, fmt.Errorf("--token and --id are required")
+	} else {
+		if strings.TrimSpace(o.token) == "" {
+			return o, false, fmt.Errorf("--token is required")
+		}
+		if (o.command == "match" || o.command == "catalogue") && o.id == "" {
+			return o, false, fmt.Errorf("--id is required")
+		}
 	}
 	return o, false, nil
 }

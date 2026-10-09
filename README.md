@@ -58,7 +58,7 @@ Diagnostics go to stderr. Exit codes are 0 for success/help, 1 for request or
 certificate failures, and 2 for invalid arguments. Use `--help` or
 `<command> --help` for usage.
 
-The initial version supports login and inspection only. It has no game logic,
+The initial version supports login, inspection, and membership listing only. It has no game logic,
 public SDK, registration, lobby management, launch, drafting, or admin commands.
 
 ## Config-file defaults
@@ -79,7 +79,8 @@ to select another file. For example:
 Explicit flags override individual config values, including empty values:
 `--cacert=""` disables the configured certificate file. The `server` and
 `cacert` defaults apply to all commands; `email` and `password` apply only to
-login. `--token` and `--id` must still be supplied explicitly.
+login. `--token` must still be supplied explicitly. Single-match commands also require
+`--id`; listing commands do not accept it.
 
 Only the configured `cacert` value expands environment references (`$VAR` or
 `${VAR}`). A referenced variable must be set when that default is used.
@@ -98,3 +99,17 @@ an unreadable file, or invalid JSON produces exit code 2 without an API call.
 Help does not load config or display configured credentials. The local
 `grimcli.json` is ignored by Git and created with owner-only read/write access
 (mode `0600`).
+
+## List your memberships
+
+```sh
+./grimcli matches --token '<user-token>'
+./grimcli lobbies --token '<user-token>'
+```
+
+These commands use the same server, certificate, and config flags as other
+commands. They call authenticated `GET /matches` and `GET /lobbies` for the
+supplied token's user and print indented JSON envelopes. Entries contain only
+`id` and `status`; fetch individual items for details. All nondeleted states
+are included, ordered by ID, without pagination. Empty lists are `[]`.
+Neither command accepts `--id` or another user's ID.

@@ -48,6 +48,10 @@ func execute(ctx context.Context, client *http.Client, o options, out io.Writer)
 		method, path, response = api.LoginMethod, api.LoginRoute, &api.LoginResponse{}
 	case "match":
 		method, path, response = api.GetMatchMethod, api.GetMatchPath(o.id), &api.MatchResponse{}
+	case "matches":
+		method, path, response = api.ListMatchesMethod, api.ListMatchesRoute, &api.ListMatchesResponse{}
+	case "lobbies":
+		method, path, response = api.ListLobbiesMethod, api.ListLobbiesRoute, &api.ListLobbiesResponse{}
 	case "catalogue":
 		method, path, response = api.GetCatalogueMethod, api.GetCataloguePath(o.id), &api.CatalogueResponse{}
 	}
@@ -89,6 +93,14 @@ func execute(ctx context.Context, client *http.Client, o options, out io.Writer)
 		}
 		_, err = fmt.Fprintln(out, result.Token)
 		return err
+	case *api.ListMatchesResponse:
+		if result.Matches == nil {
+			return fmt.Errorf("matches response is missing matches array")
+		}
+	case *api.ListLobbiesResponse:
+		if result.Lobbies == nil {
+			return fmt.Errorf("lobbies response is missing lobbies array")
+		}
 	case *api.MatchResponse:
 		if result.Match == nil {
 			return fmt.Errorf("match response is missing match")
