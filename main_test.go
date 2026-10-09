@@ -23,6 +23,7 @@ func invoke(args ...string) (int, string, string) {
 }
 
 func TestCommands(t *testing.T) {
+	isolatedDirectory(t)
 	var tokens []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -69,6 +70,7 @@ func TestCommands(t *testing.T) {
 }
 
 func TestArgumentValidation(t *testing.T) {
+	isolatedDirectory(t)
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
 	defer server.Close()
@@ -94,6 +96,7 @@ func TestArgumentValidation(t *testing.T) {
 }
 
 func TestResponseFailures(t *testing.T) {
+	isolatedDirectory(t)
 	for _, tc := range []struct {
 		name       string
 		status     int
@@ -124,6 +127,7 @@ func TestResponseFailures(t *testing.T) {
 }
 
 func TestTLSAndTimeout(t *testing.T) {
+	isolatedDirectory(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"match":{"id":"id"}}`)) }))
 	defer server.Close()
 	cert := filepath.Join(t.TempDir(), "server.pem")

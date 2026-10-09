@@ -2,8 +2,8 @@
 
 A small, stateless Go CLI for the Grimoire HTTP API. Each protected command
 requires an explicit token, allowing commands for multiple users from the same
-installation. No credentials or sessions are stored, and environment variables
-are not used for configuration.
+installation. Tokens and sessions are never stored. Optional JSON configuration
+provides argument defaults, including login credentials.
 
 ## Setup
 
@@ -60,3 +60,41 @@ certificate failures, and 2 for invalid arguments. Use `--help` or
 
 The initial version supports login and inspection only. It has no game logic,
 public SDK, registration, lobby management, launch, drafting, or admin commands.
+
+## Config-file defaults
+
+Each command automatically reads `grimcli.json` from the current working
+directory when present. Use `--config /path/to/defaults.json` after the command
+to select another file. For example:
+
+```json
+{
+  "server": "https://localhost:8080",
+  "cacert": "$GRIM_SSL/grim.crt",
+  "email": "bob@aol.com",
+  "password": "password123"
+}
+```
+
+Explicit flags override individual config values, including empty values:
+`--cacert=""` disables the configured certificate file. The `server` and
+`cacert` defaults apply to all commands; `email` and `password` apply only to
+login. `--token` and `--id` must still be supplied explicitly.
+
+Only the configured `cacert` value expands environment references (`$VAR` or
+`${VAR}`). A referenced variable must be set when that default is used.
+Explicit command-line paths use normal shell expansion. Relative certificate
+paths are relative to the current working directory.
+
+```sh
+./grimcli login
+./grimcli login --email alice@example.com --password '...'
+./grimcli match --token '<bob-token>' --id '<match-id>'
+./grimcli login --config ./another-config.json
+```
+
+The automatic config file may be absent. An explicitly selected missing file,
+an unreadable file, or invalid JSON produces exit code 2 without an API call.
+Help does not load config or display configured credentials. The local
+`grimcli.json` is ignored by Git and created with owner-only read/write access
+(mode `0600`).

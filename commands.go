@@ -29,6 +29,8 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 	}
 	flags := flag.NewFlagSet(o.command, flag.ContinueOnError)
 	flags.SetOutput(diagnostics)
+	var configPath string
+	flags.StringVar(&configPath, "config", "grimcli.json", "JSON defaults file (default: current directory)")
 	flags.StringVar(&o.server, "server", "", "Required server origin, e.g. https://localhost:8080")
 	flags.StringVar(&o.caCert, "cacert", "", "PEM certificate file to trust in addition to system roots")
 	if o.command == "login" {
@@ -46,6 +48,11 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 	}
 	if flags.NArg() != 0 {
 		return o, false, fmt.Errorf("unexpected positional arguments")
+	}
+	explicit := make(map[string]bool)
+	flags.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	if err := applyConfig(&o, configPath, explicit); err != nil {
+		return o, false, err
 	}
 	if o.server == "" {
 		return o, false, fmt.Errorf("--server is required")
