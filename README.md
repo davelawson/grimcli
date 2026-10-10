@@ -113,3 +113,54 @@ supplied token's user and print indented JSON envelopes. Entries contain only
 `id` and `status`; fetch individual items for details. All nondeleted states
 are included, ordered by ID, without pagination. Empty lists are `[]`.
 Neither command accepts `--id` or another user's ID.
+
+## Interactive sessions
+
+Build the CLI with `go build .`, install `jq`, and run the Bash wrapper:
+
+```sh
+./grimcli-session.sh
+# Or select another defaults file:
+./grimcli-session.sh --config /path/to/defaults.json
+```
+
+The compiled `grimcli` must be beside the script. Config defaults still come
+from `grimcli.json` in your current working directory. The wrapper prompts for
+an email and a hidden password; leave either field blank to use that field's
+configured default. Fields without defaults require input. If no server is
+configured, the wrapper prompts for its origin. Certificate defaults and their
+environment expansion use the CLI's existing config handling.
+
+After login, choose a numbered menu action to list matches or lobbies, view a
+match, or view its catalogue. JSON responses and CLI errors appear directly in
+the terminal. The wrapper asks for a match ID when first needed and reuses it
+until you change it or log in again. Use the list-matches action to find IDs.
+Failed calls return to the menu; an expired token can be replaced with the
+log-in-again action. Failed logins offer retry or quit.
+
+Press Escape while entering a menu choice, match ID, or login credentials to
+cancel the action and return to the menu. Cancellation preserves your current
+login and selected match and sends no request. Escape during initial setup
+exits the wrapper. Backspace edits input; Ctrl-U clears the current input.
+
+The wrapper keeps its token and selected match ID in memory only, displays no
+token, and writes no credentials or session files. Entered passwords are
+discarded after each login attempt. Quit with menu option `0`, EOF (Ctrl-D), or
+Ctrl-C. Each process has independent state, so simulate multiple players by
+running the wrapper in two terminals and entering different login credentials:
+
+```sh
+# Terminal 1: log in as Alice.
+./grimcli-session.sh
+
+# Terminal 2: log in as Bob.
+./grimcli-session.sh
+```
+
+The wrapper uses the CLI's existing credential flags; their values may be
+visible in process arguments while a CLI call runs. It supports the CLI's
+current inspection and membership-listing commands, with no game mutations.
+
+Run `bash -n grimcli-session.sh`, `go test ./...`, and `go vet ./...` to check
+changes. Wrapper tests require Bash and `jq` and use a temporary stub CLI;
+they need no running backend.
