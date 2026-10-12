@@ -7,10 +7,10 @@ usage() {
     cat <<'EOF'
 Usage: grimcli-session.sh [--config PATH]
 
-Interactively log in and inspect matches, catalogues, and lobby memberships.
+Interactively log in, manage lobbies, launch matches, and inspect catalogues.
 Requires Bash, jq, and a compiled grimcli beside this script.
 Defaults come from grimcli.json in the current working directory.
-Tokens and selected match IDs are kept in memory until exit.
+Tokens and selected lobby and match IDs are kept in memory until exit.
 Escape cancels input and returns to the menu (or exits during initial setup).
 EOF
 }
@@ -42,6 +42,7 @@ cli=$script_dir/grimcli
 
 token=''
 match_id=''
+lobby_id=''
 terminal_state=''
 pending_key=''
 restore_terminal() {
@@ -50,7 +51,7 @@ restore_terminal() {
         terminal_state=''
     fi
 }
-cleanup() { restore_terminal; unset token match_id input; }
+cleanup() { restore_terminal; unset token match_id lobby_id input; }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -188,6 +189,7 @@ login() {
             if [[ -n "$candidate" ]]; then
                 token=$candidate
                 match_id=''
+                lobby_id=''
                 printf 'Logged in.\n'
                 return
             fi
@@ -213,11 +215,33 @@ select_match() {
     done
 }
 
+# Prompt into input without changing the current selection. Callers commit only
+# after a successful command, or when explicitly selecting a lobby.
+require_value() {
+    input=''
+    while [[ -z "$input" ]]; do
+        prompt "$1" || return 1
+    done
+}
+
+select_lobby() {
+    if [[ -n "$lobby_id" ]]; then
+        prompt "Lobby ID (blank keeps $lobby_id): " || return 1
+        [[ -n "$input" ]] && lobby_id=$input
+    else
+        require_value 'Lobby ID: ' || return 1
+        lobby_id=$input
+    fi
+    return 0
+}
+
 login || exit 0
 while true; do
-    printf '\n1) List matches\n2) List lobbies\n3) View match\n4) View catalogue\n5) Change selected match ID\n6) Log in again\n0) Quit\n'
+    printf '\n1) List matches\n2) List lobbies\n3) View match\n4) View catalogue\n5) Change selected match ID\n6) Log in again\n7) Browse public lobbies\n8) View lobby\n9) Create lobby\n10) Join lobby\n11) Ready\n12) Unready\n13) Launch lobby\n14) Leave lobby\n15) Remove user from lobby\n16) Delete lobby\n17) Change selected lobby ID\n0) Quit\n'
     [[ -n "$match_id" ]] && printf 'Selected match: %s\n' "$match_id"
+    [[ -n "$lobby_id" ]] && printf 'Selected lobby: %s\n' "$lobby_id"
     prompt 'Choose an action: ' || continue
+    ready_value=''
     case "$input" in
         1) command_name=matches ;;
         2) command_name=lobbies ;;
@@ -225,20 +249,75 @@ while true; do
         4) command_name=catalogue ;;
         5) select_match; continue ;;
         6) login; continue ;;
+        7) command_name=public-lobbies ;;
+        8) command_name=lobby ;;
+        9) command_name=lobby-create ;;
+        10) command_name=lobby-join ;;
+        11) command_name=lobby-ready; ready_value=true ;;
+        12) command_name=lobby-ready; ready_value=false ;;
+        13) command_name=lobby-launch ;;
+        14) command_name=lobby-leave ;;
+        15) command_name=lobby-remove-user ;;
+        16) command_name=lobby-delete ;;
+        17) select_lobby; continue ;;
         0|q|Q) exit 0 ;;
         *) printf 'Choose one of the listed actions.\n' >&2; continue ;;
     esac
-    if [[ "$command_name" == match || "$command_name" == catalogue ]]; then
-        if [[ -z "$match_id" ]]; then
-            select_match || continue
-        fi
-    fi
     args=("$command_name" "${common_args[@]}" --token "$token")
-    if [[ "$command_name" == match || "$command_name" == catalogue ]]; then
-        args+=(--id "$match_id")
+    request_id=''
+    case "$command_name" in
+        match|catalogue)
+            request_id=$match_id
+            if [[ -z "$request_id" ]]; then
+                require_value 'Match ID: ' || continue
+                request_id=$input
+            fi
+            args+=(--id "$request_id")
+            ;;
+        lobby-create)
+            require_value 'Lobby name: ' || continue
+            args+=(--name "$input")
+            ;;
+        lobby|lobby-*)
+            request_id=$lobby_id
+            if [[ -z "$request_id" ]]; then
+                require_value 'Lobby ID: ' || continue
+                request_id=$input
+            fi
+            args+=(--id "$request_id")
+            ;;
+    esac
+    if [[ "$command_name" == lobby-remove-user ]]; then
+        require_value 'Target user ID: ' || continue
+        args+=(--userid "$input")
     fi
-    if ! "$cli" "${args[@]}"; then
-        printf 'Command failed. You can retry, change the match ID, or log in again.\n' >&2
+    [[ -n "$ready_value" ]] && args+=(--ready="$ready_value")
+    if response=$("$cli" "${args[@]}"); then
+        [[ -n "$response" ]] && printf '%s\n' "$response"
+        case "$command_name" in
+            lobby-create|lobby-join|lobby-launch)
+                case "$command_name" in
+                    lobby-create) id_filter='.id' ;;
+                    lobby-join) id_filter='.lobby.id' ;;
+                    lobby-launch) id_filter='.match.id' ;;
+                esac
+                if selected_id=$(jq -er "$id_filter | select(type == \"string\" and length > 0)" <<<"$response"); then
+                    if [[ "$command_name" == lobby-launch ]]; then
+                        match_id=$selected_id
+                        lobby_id=$request_id
+                    else
+                        lobby_id=$selected_id
+                    fi
+                else
+                    printf 'Response is missing the selected ID.\n' >&2
+                fi
+                ;;
+            lobby-leave|lobby-delete) lobby_id='' ;;
+            lobby|lobby-ready|lobby-remove-user) lobby_id=$request_id ;;
+            match|catalogue) match_id=$request_id ;;
+        esac
+    else
+        printf 'Command failed. You can retry, change the selected ID, or log in again.\n' >&2
     fi
-    unset args
+    unset args response selected_id
 done

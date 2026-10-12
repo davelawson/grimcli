@@ -58,8 +58,9 @@ Diagnostics go to stderr. Exit codes are 0 for success/help, 1 for request or
 certificate failures, and 2 for invalid arguments. Use `--help` or
 `<command> --help` for usage.
 
-The initial version supports login, inspection, and membership listing only. It has no game logic,
-public SDK, registration, lobby management, launch, drafting, or admin commands.
+The CLI supports login, inspection, membership listing, and lobby management
+through launch. Registration, ownership transfer, drafting, and admin commands
+are outside its current scope.
 
 ## Config-file defaults
 
@@ -79,8 +80,8 @@ to select another file. For example:
 Explicit flags override individual config values, including empty values:
 `--cacert=""` disables the configured certificate file. The `server` and
 `cacert` defaults apply to all commands; `email` and `password` apply only to
-login. `--token` must still be supplied explicitly. Single-match commands also require
-`--id`; listing commands do not accept it.
+login. `--token` must still be supplied explicitly. Commands that address a match or lobby require `--id`; listing commands do
+not accept it. Lobby names, target IDs, and readiness are supplied explicitly.
 
 Only the configured `cacert` value expands environment references (`$VAR` or
 `${VAR}`). A referenced variable must be set when that default is used.
@@ -114,6 +115,33 @@ supplied token's user and print indented JSON envelopes. Entries contain only
 are included, ordered by ID, without pagination. Empty lists are `[]`.
 Neither command accepts `--id` or another user's ID.
 
+## Lobby flow
+
+Every command below requires `--token '<user-token>'` and uses the existing
+server, certificate, and config defaults.
+
+| Command | Required arguments | Result |
+| --- | --- | --- |
+| `public-lobbies` | None | Available public lobby summaries |
+| `lobby` | `--id '<lobby-id>'` | Member-only lobby details |
+| `lobby-create` | `--name 'Friday game'` | Public lobby ID; creator becomes owner/member |
+| `lobby-join` | `--id '<lobby-id>'` | Join as the token's user; returns lobby |
+| `lobby-ready` | `--id '<lobby-id>' --ready=true` or `--ready=false` | Set own readiness; returns lobby |
+| `lobby-launch` | `--id '<lobby-id>'` | Owner launches; returns match with status 201 |
+| `lobby-leave` | `--id '<lobby-id>'` | Self-departure, no response body |
+| `lobby-remove-user` | `--id '<lobby-id>' --userid '<user-id>'` | Explicit-target removal, no response body |
+| `lobby-delete` | `--id '<lobby-id>'` | Delete owned open lobby, no response body |
+
+Responses print as indented JSON envelopes. Leave, removal, and deletion print
+nothing on success. `--ready` requires an explicit `true` or `false` value.
+Launch always sends the lobby ID as `requestid`; retry the same command after a
+lost response without generating or storing another UUID.
+
+Lobbies hold at most four members, and each user may belong to one open lobby.
+Roster changes reset everyone's readiness. Launch requires the owner and two
+to four ready members. Owners must transfer ownership through the backend API
+or delete their open lobby before leaving. Closed lobbies reject changes.
+
 ## Interactive sessions
 
 Build the CLI with `go build .`, install `jq`, and run the Bash wrapper:
@@ -131,19 +159,24 @@ configured default. Fields without defaults require input. If no server is
 configured, the wrapper prompts for its origin. Certificate defaults and their
 environment expansion use the CLI's existing config handling.
 
-After login, choose a numbered menu action to list matches or lobbies, view a
-match, or view its catalogue. JSON responses and CLI errors appear directly in
-the terminal. The wrapper asks for a match ID when first needed and reuses it
-until you change it or log in again. Use the list-matches action to find IDs.
-Failed calls return to the menu; an expired token can be replaced with the
-log-in-again action. Failed logins offer retry or quit.
+Menu actions 1–6 retain their original meanings. Actions 7–17 browse public
+lobbies, view/create/join a lobby, ready/unready, launch, leave, remove a user,
+delete, and change the selected lobby ID. Names, missing lobby IDs, and removal
+targets are prompted as needed. Use action 17 to choose a different lobby.
 
-Press Escape while entering a menu choice, match ID, or login credentials to
+Lobby and match selections are independent. Successful creation or joining
+selects the returned lobby; launch selects the returned match. Self-leave or
+deletion clears the lobby selection. Successful login clears both selections.
+JSON responses print to the terminal while `jq` extracts returned IDs. Failed
+calls preserve selections and return to the menu, allowing launch retries with
+the same lobby ID. Failed logins offer retry or quit.
+
+Press Escape while entering a menu choice, lobby name, lobby/match ID, removal target, or login credentials to
 cancel the action and return to the menu. Cancellation preserves your current
-login and selected match and sends no request. Escape during initial setup
+login and selections and sends no request. Escape during initial setup
 exits the wrapper. Backspace edits input; Ctrl-U clears the current input.
 
-The wrapper keeps its token and selected match ID in memory only, displays no
+The wrapper keeps its token and selected lobby and match IDs in memory only, displays no
 token, and writes no credentials or session files. Entered passwords are
 discarded after each login attempt. Quit with menu option `0`, EOF (Ctrl-D), or
 Ctrl-C. Each process has independent state, so simulate multiple players by
@@ -158,8 +191,8 @@ running the wrapper in two terminals and entering different login credentials:
 ```
 
 The wrapper uses the CLI's existing credential flags; their values may be
-visible in process arguments while a CLI call runs. It supports the CLI's
-current inspection and membership-listing commands, with no game mutations.
+visible in process arguments while a CLI call runs. Lobby actions use the same per-command token and request conventions as
+inspection commands.
 
 Run `bash -n grimcli-session.sh`, `go test ./...`, and `go vet ./...` to check
 changes. Wrapper tests require Bash and `jq` and use a temporary stub CLI;

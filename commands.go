@@ -8,10 +8,21 @@ import (
 	"strings"
 )
 
-type options struct{ command, server, token, id, email, password, caCert string }
+type options struct {
+	command, server, token, id, email, password, caCert, name, userID string
+	ready                                                             bool
+}
+
+func requiresID(command string) bool {
+	switch command {
+	case "match", "catalogue", "lobby", "lobby-join", "lobby-ready", "lobby-launch", "lobby-leave", "lobby-remove-user", "lobby-delete":
+		return true
+	}
+	return false
+}
 
 func usage(out io.Writer) {
-	fmt.Fprintln(out, "Usage: grimcli <login|match|catalogue|matches|lobbies> [flags]\nUse grimcli <command> --help for command flags.")
+	fmt.Fprintln(out, "Usage: grimcli <login|match|catalogue|matches|lobbies|public-lobbies|lobby|lobby-create|lobby-join|lobby-ready|lobby-launch|lobby-leave|lobby-remove-user|lobby-delete> [flags]\nUse grimcli <command> --help for command flags.")
 }
 
 func parse(args []string, diagnostics io.Writer) (o options, help bool, err error) {
@@ -24,12 +35,14 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 		return o, true, nil
 	}
 	o.command = args[0]
-	if o.command != "login" && o.command != "match" && o.command != "catalogue" && o.command != "matches" && o.command != "lobbies" {
+	switch o.command {
+	case "login", "match", "catalogue", "matches", "lobbies", "public-lobbies", "lobby", "lobby-create", "lobby-join", "lobby-ready", "lobby-launch", "lobby-leave", "lobby-remove-user", "lobby-delete":
+	default:
 		return o, false, fmt.Errorf("unknown command %q", o.command)
 	}
 	flags := flag.NewFlagSet(o.command, flag.ContinueOnError)
 	flags.SetOutput(diagnostics)
-	var configPath string
+	var configPath, readyValue string
 	flags.StringVar(&configPath, "config", "grimcli.json", "JSON defaults file (default: current directory)")
 	flags.StringVar(&o.server, "server", "", "Required server origin, e.g. https://localhost:8080")
 	flags.StringVar(&o.caCert, "cacert", "", "PEM certificate file to trust in addition to system roots")
@@ -38,9 +51,18 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 		flags.StringVar(&o.password, "password", "", "Required password")
 	} else {
 		flags.StringVar(&o.token, "token", "", "Required raw login token")
-		if o.command == "match" || o.command == "catalogue" {
-			flags.StringVar(&o.id, "id", "", "Required match ID")
+		if requiresID(o.command) {
+			flags.StringVar(&o.id, "id", "", "Required lobby or match ID")
 		}
+	}
+	if o.command == "lobby-create" {
+		flags.StringVar(&o.name, "name", "", "Required public lobby name")
+	}
+	if o.command == "lobby-remove-user" {
+		flags.StringVar(&o.userID, "userid", "", "Required target user ID")
+	}
+	if o.command == "lobby-ready" {
+		flags.StringVar(&readyValue, "ready", "", "Required explicit readiness: --ready=true or --ready=false")
 	}
 	if err = flags.Parse(args[1:]); err != nil {
 		if err == flag.ErrHelp {
@@ -72,9 +94,19 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 		if strings.TrimSpace(o.token) == "" {
 			return o, false, fmt.Errorf("--token is required")
 		}
-		if (o.command == "match" || o.command == "catalogue") && o.id == "" {
+		if requiresID(o.command) && strings.TrimSpace(o.id) == "" {
 			return o, false, fmt.Errorf("--id is required")
 		}
 	}
+	if o.command == "lobby-create" && strings.TrimSpace(o.name) == "" {
+		return o, false, fmt.Errorf("--name is required")
+	}
+	if o.command == "lobby-remove-user" && strings.TrimSpace(o.userID) == "" {
+		return o, false, fmt.Errorf("--userid is required")
+	}
+	if o.command == "lobby-ready" && (!explicit["ready"] || (readyValue != "true" && readyValue != "false")) {
+		return o, false, fmt.Errorf("--ready=true or --ready=false is required")
+	}
+	o.ready = readyValue == "true"
 	return o, false, nil
 }

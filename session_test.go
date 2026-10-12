@@ -38,6 +38,20 @@ if [[ "$command_name" == login ]]; then
 elif [[ "$command_name" == "${SESSION_FAIL:-}" ]]; then
     printf 'HTTP 401: unauthorized\n' >&2
     exit 1
+elif [[ "${SESSION_LOBBY_MODE:-}" == true ]]; then
+    case "$command_name" in
+        lobby-create) printf '{"id":"created-lobby"}\n' ;;
+        lobby-join) printf '{"lobby":{"id":"joined-lobby"}}\n' ;;
+        lobby-launch)
+            if [[ $(jq -s '[.[] | select(.[0] == "lobby-launch")] | length' "$SESSION_LOG") == 1 ]]; then
+                printf 'HTTP 409: lobby_not_ready\n' >&2
+                exit 1
+            fi
+            printf '{"match":{"id":"launched-match"}}\n'
+            ;;
+        lobby-leave|lobby-remove-user|lobby-delete) ;;
+        *) printf '{"action":"%s"}\n' "$command_name" ;;
+    esac
 else
     printf '{"action":"%s"}\n' "$command_name"
 fi
@@ -357,5 +371,103 @@ func TestSessionControlKeysExit(t *testing.T) {
 				t.Fatalf("interrupted password was used or exposed: %s", output)
 			}
 		})
+	}
+}
+
+func TestSessionCompleteLobbyFlow(t *testing.T) {
+	f := newSessionFixture(t, sessionConfig)
+	name := "Friday $(touch injected) `touch injected` *"
+	target := "user $(touch injected) ; *"
+	cmd, output := f.command(t, "\n\n7\n9\n"+name+"\n8\n11\n12\n15\n"+target+"\n13\n13\n3\n14\n10\njoin-input\n8\n16\n8\nmanual-lobby\n6\nnew-user\n\n8\nfresh-lobby\n4\nfresh-match\n0\n")
+	cmd.Env = append(cmd.Env, "SESSION_LOBBY_MODE=true")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, output)
+	}
+	common := []string{"--config", "grimcli.json", "--server", "https://localhost:8080"}
+	var want [][]string
+	for _, tc := range []struct {
+		command, token string
+		tail           []string
+	}{
+		{"login", "", nil}, {"public-lobbies", "config-user", nil},
+		{"lobby-create", "config-user", []string{"--name", name}},
+		{"lobby", "config-user", []string{"--id", "created-lobby"}},
+		{"lobby-ready", "config-user", []string{"--id", "created-lobby", "--ready=true"}},
+		{"lobby-ready", "config-user", []string{"--id", "created-lobby", "--ready=false"}},
+		{"lobby-remove-user", "config-user", []string{"--id", "created-lobby", "--userid", target}},
+		{"lobby-launch", "config-user", []string{"--id", "created-lobby"}},
+		{"lobby-launch", "config-user", []string{"--id", "created-lobby"}},
+		{"match", "config-user", []string{"--id", "launched-match"}},
+		{"lobby-leave", "config-user", []string{"--id", "created-lobby"}},
+		{"lobby-join", "config-user", []string{"--id", "join-input"}},
+		{"lobby", "config-user", []string{"--id", "joined-lobby"}},
+		{"lobby-delete", "config-user", []string{"--id", "joined-lobby"}},
+		{"lobby", "config-user", []string{"--id", "manual-lobby"}},
+		{"login", "", []string{"--email", "new-user"}},
+		{"lobby", "new-user", []string{"--id", "fresh-lobby"}},
+		{"catalogue", "new-user", []string{"--id", "fresh-match"}},
+	} {
+		args := append([]string{tc.command}, common...)
+		if tc.token != "" {
+			args = append(args, "--token", "token:"+tc.token)
+		}
+		args = append(args, tc.tail...)
+		want = append(want, args)
+	}
+	if got := f.calls(t); !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls: %q\nwant: %q\noutput: %s", got, want, output)
+	}
+	for _, response := range []string{`{"id":"created-lobby"}`, `{"lobby":{"id":"joined-lobby"}}`, `{"match":{"id":"launched-match"}}`, "HTTP 409"} {
+		if !strings.Contains(output.String(), response) {
+			t.Errorf("missing %s", response)
+		}
+	}
+	for _, secret := range []string{"token:config-user", "token:new-user", "config-password"} {
+		if strings.Contains(output.String(), secret) {
+			t.Fatal("secret exposed")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "injected")); !os.IsNotExist(err) {
+		t.Fatal("shell argument executed")
+	}
+}
+
+func TestSessionLobbyFailuresAndCancellation(t *testing.T) {
+	for _, failed := range []string{"lobby-create", "lobby-join", "lobby-launch", "lobby-leave", "lobby-delete", "lobby-remove-user"} {
+		t.Run(failed, func(t *testing.T) {
+			f := newSessionFixture(t, sessionConfig)
+			action := map[string]string{"lobby-create": "9\nnew name\n", "lobby-join": "10\n", "lobby-launch": "13\n", "lobby-leave": "14\n", "lobby-delete": "16\n", "lobby-remove-user": "15\ntarget\n"}[failed]
+			// Cancel changing the lobby, entering a name/target, and a second login.
+			// Failed mutations must preserve both the prior lobby and prior match.
+			input := "\n\n17\nold-lobby\n5\nold-match\n17\npartial\x1b9\npartial\x1b15\npartial\x1b6\nother-user\npartial\x1b" + action + "8\n3\n0\n"
+			cmd, output := f.command(t, input)
+			cmd.Env = append(cmd.Env, "SESSION_LOBBY_MODE=true", "SESSION_FAIL="+failed)
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("%v %s", err, output)
+			}
+			calls := f.calls(t)
+			if len(calls) != 4 || calls[1][0] != failed || calls[2][0] != "lobby" || calls[3][0] != "match" {
+				t.Fatalf("calls: %q\n%s", calls, output)
+			}
+			for i, id := range []string{"old-lobby", "old-match"} {
+				args := calls[i+2]
+				if args[len(args)-1] != id {
+					t.Fatal(calls)
+				}
+			}
+		})
+	}
+}
+
+func TestSessionCancelledRequiredLobbyPrompt(t *testing.T) {
+	f := newSessionFixture(t, sessionConfig)
+	cmd, output := f.command(t, "\n\n15\npartial\x1b10\njoined-input\n0\n")
+	cmd.Env = append(cmd.Env, "SESSION_LOBBY_MODE=true")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v %s", err, output)
+	}
+	calls := f.calls(t)
+	if len(calls) != 2 || calls[1][0] != "lobby-join" || calls[1][len(calls[1])-1] != "joined-input" {
+		t.Fatal(calls)
 	}
 }
