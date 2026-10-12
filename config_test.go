@@ -69,7 +69,7 @@ func TestConfigRequests(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if r.URL.Path == api.LoginRoute {
+		if r.URL.Path == api.Login.Route {
 			var req api.LoginRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email != "bob@aol.com" || req.Password != "password123" {
 				t.Error("wrong configured login payload")

@@ -27,8 +27,8 @@ func TestCommands(t *testing.T) {
 	var tokens []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case api.LoginRoute:
-			if r.Method != api.LoginMethod || r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Authorization") != "" {
+		case api.Login.Route:
+			if r.Method != api.Login.Method || r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Authorization") != "" {
 				t.Errorf("incorrect login request")
 			}
 			var login api.LoginRequest
@@ -37,13 +37,13 @@ func TestCommands(t *testing.T) {
 			}
 			json.NewEncoder(w).Encode(api.LoginResponse{Token: "alice-token"})
 		case "/match/a/b":
-			if r.Method != api.GetMatchMethod || r.URL.EscapedPath() != "/match/a%2Fb" {
+			if r.Method != api.GetMatch.Method || r.URL.EscapedPath() != "/match/a%2Fb" {
 				t.Errorf("incorrect match route: %s", r.URL)
 			}
 			tokens = append(tokens, r.Header.Get("Authorization"))
 			json.NewEncoder(w).Encode(api.MatchResponse{Match: &api.MatchView{ID: "a/b"}})
 		case "/match/id/catalogue":
-			if r.Method != api.GetCatalogueMethod || r.Header.Get("Authorization") != "catalogue-token" {
+			if r.Method != api.GetCatalogue.Method || r.Header.Get("Authorization") != "catalogue-token" {
 				t.Errorf("incorrect catalogue request")
 			}
 			json.NewEncoder(w).Encode(api.CatalogueResponse{Catalogue: &api.Catalogue{RulesVersion: "opening-v1"}})

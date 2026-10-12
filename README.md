@@ -44,7 +44,7 @@ go mod tidy
   --token '<alice-token>' --id '<match-id>'
 ```
 
-Login prints only the token and a newline. Match and catalogue commands print
+Login prints only the token and a newline. Match, catalogue, and draft commands print
 indented JSON response envelopes. Tokens are sent directly in the Authorization
 header, following the current backend contract. The server flag takes an HTTP
 or HTTPS origin without a path, query, or embedded credentials.
@@ -59,7 +59,7 @@ certificate failures, and 2 for invalid arguments. Use `--help` or
 `<command> --help` for usage.
 
 The CLI supports login, inspection, membership listing, and lobby management
-through launch. Registration, ownership transfer, drafting, and admin commands
+through launch and drafting. Registration, ownership transfer, and admin commands
 are outside its current scope.
 
 ## Config-file defaults
@@ -142,9 +142,50 @@ Roster changes reset everyone's readiness. Launch requires the owner and two
 to four ready members. Owners must transfer ownership through the backend API
 or delete their open lobby before leaving. Closed lobbies reject changes.
 
+## Drafting
+
+Both commands require an explicit token and match ID and accept the usual
+server, certificate, and config flags. They use `GET /match/:id/draft` and
+`POST /match/:id/draft` and print an indented `api.DraftResponse` containing
+only your draft progress, offered cards, match revision, and status.
+
+```sh
+# Fetch your current step, options, and revision (also how to resume).
+./grimcli draft --token '<user-token>' --id '<match-id>'
+
+# Use an offered design ID and the revision returned by the server.
+request_id=$(uuidgen)
+./grimcli draft-pick --token '<user-token>' --id '<match-id>' \
+  --type choose_chantry --cardid chantry_fire --revision 0 \
+  --requestid "$request_id"
+
+# If the response was lost, repeat the exact command with the same request ID.
+./grimcli draft-pick --token '<user-token>' --id '<match-id>' \
+  --type choose_chantry --cardid chantry_fire --revision 0 \
+  --requestid "$request_id"
+```
+
+All pick flags are required, including `--revision 0` for a new match.
+Revisions must be nonnegative integers, IDs must be nonblank, and request IDs
+must be UUIDs in hyphenated `8-4-4-4-12` form (hexadecimal, either case).
+The step determines the type: `chantry` → `choose_chantry`, `victory_path` →
+`choose_victory_path`, and `minion` → `choose_minion`. Picks are irreversible.
+The CLI submits once and reports backend errors on stderr.
+
+Keep the request ID **and all pick arguments** unchanged when retrying a
+request. The backend returns its recorded response if it already accepted
+that request; this may show an earlier revision. On `stale_revision`, fetch
+`draft` again before selecting a card using the current revision and a new
+request ID. Other players' picks can advance the match revision.
+
+A completed player's step is `complete` with an empty cards array. Match
+status `setup` means waiting for other players; `playing` means the backend
+has automatically started the game. Other players' private options and
+choices stay on the server.
+
 ## Interactive sessions
 
-Build the CLI with `go build .`, install `jq`, and run the Bash wrapper:
+Build the CLI with `go build .`, install `jq` (and `uuidgen` for drafting), and run the Bash wrapper:
 
 ```sh
 ./grimcli-session.sh
@@ -159,26 +200,64 @@ configured default. Fields without defaults require input. If no server is
 configured, the wrapper prompts for its origin. Certificate defaults and their
 environment expansion use the CLI's existing config handling.
 
-Menu actions 1–6 retain their original meanings. Actions 7–17 browse public
-lobbies, view/create/join a lobby, ready/unready, launch, leave, remove a user,
-delete, and change the selected lobby ID. Names, missing lobby IDs, and removal
-targets are prompted as needed. Use action 17 to choose a different lobby.
+Home offers **Create a lobby**, **Join a lobby**, **My lobbies**, **My matches**,
+**Account**, and **Quit**. Create prompts for a name and opens the new lobby.
+Join shows numbered public lobbies with names, occupancy, and IDs; choosing one
+joins it and opens its screen. My lobbies and My matches show numbered memberships
+with IDs and statuses. Each list offers `r` or Enter with no input to **Refresh**,
+`m` to **Enter ID manually**, and `0` to go **Back**. Membership lists also offer
+`s` to reopen the last successful selection. Empty lists explain how to continue.
 
-Lobby and match selections are independent. Successful creation or joining
-selects the returned lobby; launch selects the returned match. Self-leave or
-deletion clears the lobby selection. Successful login clears both selections.
-JSON responses print to the terminal while `jq` extracts returned IDs. Failed
-calls preserve selections and return to the menu, allowing launch retries with
-the same lobby ID. Failed logins offer retry or quit.
+Lobby screens show the name, ID, status, owner ID, member IDs, individual readiness,
+and ready count. Open lobbies offer **Mark me ready**, **Mark me unready**, **Refresh**,
+and **More actions**. With two to four members and everyone ready, **Launch match
+(owner only)** becomes available. The API does not identify your roster entry, so
+both readiness actions remain visible and the server authorizes owner actions.
+More actions offers **Leave**, **Remove member (owner only)** using a numbered
+roster, **Delete lobby (owner only)**, and **Full JSON details**. Successful leave
+or deletion returns Home. Closed lobbies with a match ID offer **Open match**;
+other non-open lobbies offer inspection and navigation.
 
-Press Escape while entering a menu choice, lobby name, lobby/match ID, removal target, or login credentials to
-cancel the action and return to the menu. Cancellation preserves your current
-login and selections and sends no request. Escape during initial setup
-exits the wrapper. Backspace edits input; Ctrl-U clears the current input.
+Launch opens the match screen. During setup, choose **Begin/resume draft** to
+start making picks. Match screens show the name, ID, status, player count, public
+draft-completion count, and your draft progress. Completed drafts display “Draft
+complete; waiting for other players.” Playing matches show “Game started” and
+available turn details; finished matches show the outcome. Every match screen
+offers **Refresh** and **More actions**, containing **Full JSON details** and
+**Catalogue JSON**. On any lobby or match screen, press Enter with no input
+to fetch the latest server data and redraw, or choose **Refresh** explicitly.
+Updates are manual; refresh after another player acts. Whitespace-only input
+keeps its existing behavior. Login, drafting, text-entry, and nested-menu
+prompts are unchanged.
+
+Lobby and match selections are independent and kept in memory. Successful creation,
+joining, or detail selection remembers the relevant ID; launch remembers the match.
+Self-leave or deletion clears the lobby selection. Successful login clears both
+selections. **Account → Log in again** supports changing users; cancelling or failing
+login preserves the current session. Failed requests keep selections and offer
+**Retry** or **Back**. After a successful mutation, a failed follow-up fetch retries
+only the fetch. Launch retries retain the same lobby-derived request ID.
+
+Drafting requires `uuidgen` on your PATH (commonly provided by `uuid-runtime` on
+Debian/Ubuntu). Each entry fetches current draft progress. Numbered cards show
+names, design IDs, printed properties, and placeholder warnings. Enter an offered
+number to submit an irreversible pick. Each new pick gets one UUID and the
+returned step's revision. After a failed draft request, `r` **Retry** resends the
+exact pending request; `f` **Refresh** fetches authoritative progress before
+offering another choice, useful after a stale revision. `0` **Back** (or `b`) and
+Escape leave drafting. Pending requests exist only in memory during the flow and
+are discarded when you leave it. Completion or cancellation returns to the match
+screen and fetches its current state. Drafting resumes only when you choose it again.
+
+Numbers are local to each screen. Use `0` for **Back** and `q` for **Quit** at menus
+and card choices. Escape cancels the current prompt or leaves the current screen;
+at Home it redisplays Home. Cancelling names, IDs, roster choices, or login
+credentials preserves the session and sends no mutation. Escape during initial
+setup exits. Backspace edits input; Ctrl-U clears the current input.
 
 The wrapper keeps its token and selected lobby and match IDs in memory only, displays no
 token, and writes no credentials or session files. Entered passwords are
-discarded after each login attempt. Quit with menu option `0`, EOF (Ctrl-D), or
+discarded after each login attempt. Quit with `q`, EOF (Ctrl-D), or
 Ctrl-C. Each process has independent state, so simulate multiple players by
 running the wrapper in two terminals and entering different login credentials:
 
@@ -194,6 +273,6 @@ The wrapper uses the CLI's existing credential flags; their values may be
 visible in process arguments while a CLI call runs. Lobby actions use the same per-command token and request conventions as
 inspection commands.
 
-Run `bash -n grimcli-session.sh`, `go test ./...`, and `go vet ./...` to check
+Run `bash -n grimcli-session.sh`, `go test -race ./...`, and `go vet ./...` to check
 changes. Wrapper tests require Bash and `jq` and use a temporary stub CLI;
-they need no running backend.
+draft tests supply a stub `uuidgen`. They need no running backend.

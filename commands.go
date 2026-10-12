@@ -5,24 +5,27 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
 type options struct {
 	command, server, token, id, email, password, caCert, name, userID string
 	ready                                                             bool
+	choiceType, cardID, requestID                                     string
+	revision                                                          int64
 }
 
 func requiresID(command string) bool {
 	switch command {
-	case "match", "catalogue", "lobby", "lobby-join", "lobby-ready", "lobby-launch", "lobby-leave", "lobby-remove-user", "lobby-delete":
+	case "draft", "draft-pick", "match", "catalogue", "lobby", "lobby-join", "lobby-ready", "lobby-launch", "lobby-leave", "lobby-remove-user", "lobby-delete":
 		return true
 	}
 	return false
 }
 
 func usage(out io.Writer) {
-	fmt.Fprintln(out, "Usage: grimcli <login|match|catalogue|matches|lobbies|public-lobbies|lobby|lobby-create|lobby-join|lobby-ready|lobby-launch|lobby-leave|lobby-remove-user|lobby-delete> [flags]\nUse grimcli <command> --help for command flags.")
+	fmt.Fprintln(out, "Usage: grimcli <login|draft|draft-pick|match|catalogue|matches|lobbies|public-lobbies|lobby|lobby-create|lobby-join|lobby-ready|lobby-launch|lobby-leave|lobby-remove-user|lobby-delete> [flags]\nUse grimcli <command> --help for command flags.")
 }
 
 func parse(args []string, diagnostics io.Writer) (o options, help bool, err error) {
@@ -36,7 +39,7 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 	}
 	o.command = args[0]
 	switch o.command {
-	case "login", "match", "catalogue", "matches", "lobbies", "public-lobbies", "lobby", "lobby-create", "lobby-join", "lobby-ready", "lobby-launch", "lobby-leave", "lobby-remove-user", "lobby-delete":
+	case "login", "draft", "draft-pick", "match", "catalogue", "matches", "lobbies", "public-lobbies", "lobby", "lobby-create", "lobby-join", "lobby-ready", "lobby-launch", "lobby-leave", "lobby-remove-user", "lobby-delete":
 	default:
 		return o, false, fmt.Errorf("unknown command %q", o.command)
 	}
@@ -54,6 +57,12 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 		if requiresID(o.command) {
 			flags.StringVar(&o.id, "id", "", "Required lobby or match ID")
 		}
+	}
+	if o.command == "draft-pick" {
+		flags.StringVar(&o.choiceType, "type", "", "Required choice: choose_chantry, choose_victory_path, or choose_minion")
+		flags.StringVar(&o.cardID, "cardid", "", "Required offered card design ID")
+		flags.Int64Var(&o.revision, "revision", 0, "Required expected revision (zero or greater)")
+		flags.StringVar(&o.requestID, "requestid", "", "Required canonical UUID; reuse the same UUID and payload for retries")
 	}
 	if o.command == "lobby-create" {
 		flags.StringVar(&o.name, "name", "", "Required public lobby name")
@@ -107,6 +116,29 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 	if o.command == "lobby-ready" && (!explicit["ready"] || (readyValue != "true" && readyValue != "false")) {
 		return o, false, fmt.Errorf("--ready=true or --ready=false is required")
 	}
+	if o.command == "draft-pick" {
+		for _, name := range []string{"id", "type", "cardid", "revision", "requestid"} {
+			if !explicit[name] {
+				return o, false, fmt.Errorf("--%s is required", name)
+			}
+		}
+		if o.revision < 0 {
+			return o, false, fmt.Errorf("--revision must be nonnegative")
+		}
+		switch o.choiceType {
+		case "choose_chantry", "choose_victory_path", "choose_minion":
+		default:
+			return o, false, fmt.Errorf("--type must be choose_chantry, choose_victory_path, or choose_minion")
+		}
+		if strings.TrimSpace(o.cardID) == "" {
+			return o, false, fmt.Errorf("--cardid is required")
+		}
+		if !canonicalUUID.MatchString(o.requestID) {
+			return o, false, fmt.Errorf("--requestid must be a canonical UUID")
+		}
+	}
 	o.ready = readyValue == "true"
 	return o, false, nil
 }
+
+var canonicalUUID = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)

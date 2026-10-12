@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/davelawson/grim/api"
@@ -42,37 +43,42 @@ func execute(ctx context.Context, client *http.Client, o options, out io.Writer)
 	switch o.command {
 	case "login":
 		payload = api.LoginRequest{Email: o.email, Password: o.password}
-		method, path, response = api.LoginMethod, api.LoginRoute, &api.LoginResponse{}
+		method, path, response = api.Login.Method, api.Login.Route, &api.LoginResponse{}
+	case "draft":
+		method, path, response = api.GetDraft.Method, api.GetDraftPath(o.id), &api.DraftResponse{}
+	case "draft-pick":
+		method, path, response = api.SubmitDraft.Method, api.SubmitDraftPath(o.id), &api.DraftResponse{}
+		payload = api.DraftPickRequest{RequestID: o.requestID, ExpectedRevision: &o.revision, Type: o.choiceType, CardID: o.cardID}
 	case "match":
-		method, path, response = api.GetMatchMethod, api.GetMatchPath(o.id), &api.MatchResponse{}
+		method, path, response = api.GetMatch.Method, api.GetMatchPath(o.id), &api.MatchResponse{}
 	case "matches":
-		method, path, response = api.ListMatchesMethod, api.ListMatchesRoute, &api.ListMatchesResponse{}
+		method, path, response = api.ListMatches.Method, api.ListMatches.Route, &api.ListMatchesResponse{}
 	case "lobbies":
-		method, path, response = api.ListLobbiesMethod, api.ListLobbiesRoute, &api.ListLobbiesResponse{}
+		method, path, response = api.ListLobbies.Method, api.ListLobbies.Route, &api.ListLobbiesResponse{}
 	case "public-lobbies":
-		method, path, response = api.ListPublicLobbiesMethod, api.ListPublicLobbiesRoute, &api.ListPublicLobbiesResponse{}
+		method, path, response = api.ListPublicLobbies.Method, api.ListPublicLobbies.Route, &api.ListPublicLobbiesResponse{}
 	case "lobby":
-		method, path, response = api.GetLobbyMethod, api.GetLobbyPath(o.id), &api.GetLobbyResponse{}
+		method, path, response = api.GetLobby.Method, api.GetLobbyPath(o.id), &api.GetLobbyResponse{}
 	case "lobby-create":
-		method, path, response = api.CreateLobbyMethod, api.CreateLobbyRoute, &api.CreateLobbyResponse{}
+		method, path, response = api.CreateLobby.Method, api.CreateLobby.Route, &api.CreateLobbyResponse{}
 		payload = api.CreateLobbyRequest{Name: o.name}
 	case "lobby-join":
-		method, path, response = api.JoinLobbyMethod, api.JoinLobbyPath(o.id), &api.GetLobbyResponse{}
+		method, path, response = api.JoinLobby.Method, api.JoinLobbyPath(o.id), &api.GetLobbyResponse{}
 	case "lobby-ready":
-		method, path, response = api.SetReadyMethod, api.SetReadyPath(o.id), &api.GetLobbyResponse{}
+		method, path, response = api.SetReady.Method, api.SetReadyPath(o.id), &api.GetLobbyResponse{}
 		payload = api.ReadyRequest{Ready: &o.ready}
 	case "lobby-launch":
-		method, path, response = api.LaunchMatchMethod, api.LaunchMatchPath(o.id), &api.MatchResponse{}
+		method, path, response = api.LaunchMatch.Method, api.LaunchMatchPath(o.id), &api.MatchResponse{}
 		payload = api.LaunchRequest{RequestID: o.id}
 		expectedStatus = http.StatusCreated
 	case "lobby-leave":
-		method, path = api.LeaveLobbyMethod, api.LeaveLobbyPath(o.id)
+		method, path = api.LeaveLobby.Method, api.LeaveLobbyPath(o.id)
 	case "lobby-remove-user":
-		method, path = api.RemoveUserFromLobbyMethod, api.RemoveUserFromLobbyPath(o.id, o.userID)
+		method, path = api.RemoveUserFromLobby.Method, api.RemoveUserFromLobbyPath(o.id, o.userID)
 	case "lobby-delete":
-		method, path = api.DeleteLobbyMethod, api.DeleteLobbyPath(o.id)
+		method, path = api.DeleteLobby.Method, api.DeleteLobbyPath(o.id)
 	case "catalogue":
-		method, path, response = api.GetCatalogueMethod, api.GetCataloguePath(o.id), &api.CatalogueResponse{}
+		method, path, response = api.GetCatalogue.Method, api.GetCataloguePath(o.id), &api.CatalogueResponse{}
 	}
 	if payload != nil {
 		data, err := json.Marshal(payload)
@@ -108,7 +114,18 @@ func execute(ctx context.Context, client *http.Client, o options, out io.Writer)
 		return nil
 	}
 	decoder := json.NewDecoder(resp.Body)
-	if err := decoder.Decode(response); err != nil {
+	// Pointer fields distinguish missing/null values from valid revision zero.
+	var target any = response
+	var draftWire struct {
+		Draft    *api.Draft       `json:"draft"`
+		Cards    []api.CardDesign `json:"cards"`
+		Revision *int64           `json:"revision"`
+		Status   *string          `json:"status"`
+	}
+	if _, ok := response.(*api.DraftResponse); ok {
+		target = &draftWire
+	}
+	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
 	var extra any
@@ -116,6 +133,44 @@ func execute(ctx context.Context, client *http.Client, o options, out io.Writer)
 		return fmt.Errorf("response contains invalid trailing JSON")
 	}
 	switch result := response.(type) {
+	case *api.DraftResponse:
+		if draftWire.Draft == nil || draftWire.Draft.Step == "" {
+			return fmt.Errorf("draft response is missing draft progress")
+		}
+		if draftWire.Revision == nil || *draftWire.Revision < 0 {
+			return fmt.Errorf("draft response is missing or invalid revision")
+		}
+		if draftWire.Status == nil {
+			return fmt.Errorf("draft response is missing status")
+		}
+		switch *draftWire.Status {
+		case "setup", "playing", "finished":
+		default:
+			return fmt.Errorf("draft response has invalid status")
+		}
+		if draftWire.Cards == nil {
+			return fmt.Errorf("draft response is missing cards array")
+		}
+		switch draftWire.Draft.Step {
+		case "chantry", "victory_path", "minion":
+			if *draftWire.Status == "setup" && len(draftWire.Cards) == 0 {
+				return fmt.Errorf("draft response is missing offered cards")
+			}
+		case "complete":
+			if len(draftWire.Cards) != 0 {
+				return fmt.Errorf("completed draft response contains cards")
+			}
+		default:
+			return fmt.Errorf("draft response has invalid step")
+		}
+		seen := make(map[string]bool)
+		for _, card := range draftWire.Cards {
+			if strings.TrimSpace(card.ID) == "" || strings.TrimSpace(card.Name) == "" || seen[card.ID] {
+				return fmt.Errorf("draft response has invalid card")
+			}
+			seen[card.ID] = true
+		}
+		*result = api.DraftResponse{Draft: *draftWire.Draft, Cards: draftWire.Cards, Revision: *draftWire.Revision, Status: *draftWire.Status}
 	case *api.LoginResponse:
 		if result.Token == "" {
 			return fmt.Errorf("login response is missing token")

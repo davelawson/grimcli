@@ -17,9 +17,9 @@ func TestListCommands(t *testing.T) {
 				calls := 0
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					calls++
-					wantPath := api.ListMatchesRoute
+					wantPath := api.ListMatches.Route
 					if command == "lobbies" {
-						wantPath = api.ListLobbiesRoute
+						wantPath = api.ListLobbies.Route
 					}
 					if r.Method != http.MethodGet || r.URL.Path != wantPath || r.Header.Get("Authorization") != "per-command-token" {
 						t.Error("wrong listing request")
