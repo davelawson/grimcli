@@ -7,11 +7,11 @@ usage() {
     cat <<'EOF'
 Usage: grimcli-session.sh [--config PATH]
 
-Interactively log in, manage lobbies, launch matches, draft, and inspect catalogues.
+Interactively log in, manage lobbies, launch matches, draft, play complete games, and inspect catalogues.
 Requires Bash, jq, and a compiled grimcli beside this script.
-Begin/resume draft on a match screen also requires uuidgen.
+Drafting and gameplay require uuidgen; gameplay requires Bash 4.4 or newer.
 Defaults come from grimcli.json in the current working directory.
-Tokens and selected lobby and match IDs are kept in memory until exit.
+Tokens, selections, catalogues and pending gameplay inputs stay in memory until exit.
 Home: Create a lobby, Join a lobby, My lobbies, My matches, Account, Quit.
 Lists use numbered choices, r or Enter to Refresh, and m to Enter ID manually.
 On lobby and match screens, Enter also refreshes.
@@ -45,6 +45,9 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || exit 2
 cli=$script_dir/grimcli
 [[ -x "$cli" && ! -d "$cli" ]] || fail 'Build grimcli beside this script with: go build .'
 
+((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4))) || fail 'Bash 4.4 or newer is required'
+source "$script_dir/gameplay-session.sh" || fail 'Cannot load gameplay-session.sh'
+
 token=''
 match_id=''
 lobby_id=''
@@ -56,7 +59,7 @@ restore_terminal() {
         terminal_state=''
     fi
 }
-cleanup() { restore_terminal; unset token match_id lobby_id input; }
+cleanup() { restore_terminal; game_clear; unset token match_id lobby_id input; }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -193,6 +196,8 @@ login() {
             unset password login_args
             if [[ -n "$candidate" ]]; then
                 token=$candidate
+                game_clear
+                response=''
                 match_id=''
                 lobby_id=''
                 printf 'Logged in.\n'
@@ -349,6 +354,10 @@ render_lobby() {
 }
 
 render_match() {
+    if jq -e '.match.status == "playing" or .match.status == "finished"' <<<"$1" >/dev/null; then
+        game_render "$1" "$(jq -r '.match.id' <<<"$1")"
+        return
+    fi
     jq -r '.match as $m |
         "\nMatch: \($m.name)", "ID: \($m.id)", "Status: \($m.status)",
         "Players: \($m.participants | length)",
@@ -386,21 +395,41 @@ match_more() {
 }
 
 match_screen() {
-    local id=$1 details=${2:-} can_draft
+    local id=$1 details=${2:-} can_draft gameplay_lane
     if ! match_details "$details"; then
-        request 'Match fetch' match --id "$id" || return
-        details=$response
+        game_fetch "$id" || return
+        details=$game_details
     fi
     match_id=$id
+    game_details=$details
+    if jq -e '.match.you.userid != null and .match.status != "setup"' <<<"$details" >/dev/null; then
+        game_catalogue "$id" || true
+    fi
     while true; do
         render_match "$details"
         can_draft=$(jq -r '.match | .status == "setup" and
             (.you.draft.step == "chantry" or .you.draft.step == "victory_path" or .you.draft.step == "minion")' <<<"$details")
         [[ "$can_draft" == true ]] && printf '1) Begin/resume draft\n'
+        gameplay_lane=$(game_lane "$details")
+        if [[ -n ${game_pending[$id]:-} ]]; then
+            printf '1) Resume pending input / fetch\n'
+        else
+            case "$gameplay_lane" in
+                actions) printf '1) Gameplay actions\n' ;;
+                priority) printf '1) Respond to Priority\n' ;;
+                choice) printf '1) Resolve required choice\n' ;;
+            esac
+        fi
         printf '2) Refresh (Enter)\n3) More actions\n0) Back\nq) Quit\n'
         menu_prompt 'Choose an action: ' || return
         case "$input" in
             1)
+                if [[ -n ${game_pending[$id]:-} || "$gameplay_lane" == actions || "$gameplay_lane" == priority || "$gameplay_lane" == choice ]]; then
+                    game_details=''
+                    game_action "$id" || true
+                    [[ -n "$game_details" ]] && details=$game_details
+                    continue
+                fi
                 if [[ "$can_draft" != true ]]; then
                     printf 'Choose one of the listed actions.\n' >&2
                     continue
@@ -408,12 +437,12 @@ match_screen() {
                 draft_flow
                 # Completion, cancellation, and failure all return here. Fetch
                 # authoritative progress but wait for another explicit draft action.
-                request 'Match fetch' match --id "$id" || return
-                details=$response
+                game_fetch "$id" || return
+                details=$game_details
                 ;;
             ''|2)
-                request 'Match fetch' match --id "$id" || return
-                details=$response
+                game_fetch "$id" || return
+                details=$game_details
                 ;;
             3) match_more "$details" "$id" ;;
             0) return ;;

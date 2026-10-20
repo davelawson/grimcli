@@ -44,7 +44,7 @@ go mod tidy
   --token '<alice-token>' --id '<match-id>'
 ```
 
-Login prints only the token and a newline. Match, catalogue, and draft commands print
+Login prints only the token and a newline. Match, catalogue, draft, and gameplay commands print
 indented JSON response envelopes. Tokens are sent directly in the Authorization
 header, following the current backend contract. The server flag takes an HTTP
 or HTTPS origin without a path, query, or embedded credentials.
@@ -59,7 +59,7 @@ certificate failures, and 2 for invalid arguments. Use `--help` or
 `<command> --help` for usage.
 
 The CLI supports login, inspection, membership listing, and lobby management
-through launch and drafting. Registration, ownership transfer, and admin commands
+through launch, drafting, and complete games. Registration, ownership transfer, and admin commands
 are outside its current scope.
 
 ## Config-file defaults
@@ -183,9 +183,96 @@ status `setup` means waiting for other players; `playing` means the backend
 has automatically started the game. Other players' private options and
 choices stay on the server.
 
+## Gameplay commands
+
+All gameplay commands require explicit `--id`, `--revision`, and `--requestid`,
+as well as the usual authentication and transport options. Revision zero is
+valid. Generate a canonical UUID with `uuidgen` for each new submission; for an
+uncertain request, reuse its UUID, revision, command, and every argument exactly.
+The CLI never fetches revisions or retries automatically.
+
+All routes are `POST /match/<id>/...`. Choice commands additionally require
+`--choiceid`, which is escaped into the URL. Gameplay has no `--type`, `--mode`,
+or generic `choose` command; drafting retains its existing `--type`.
+
+| Command | API suffix | Applicable flags |
+| --- | --- | --- |
+| `play-card` | `actions/play-card` | `--cardid` (required), `--target`, `--support` (with `--support-domain`), `--payment`, `--discard` |
+| `attack` | `actions/attack` | `--cardid` (required), `--minion` (required), `--support` (with `--support-domain`), `--payment` |
+| `challenge` | `actions/attempt-challenge` | `--cardid` (required), `--challengeid` (required), `--minion`, `--support` (with `--support-domain`), `--payment` |
+| `activate` | `actions/activate-ability` | `--cardid` (required), `--abilityid` (required), `--support` (with `--support-domain`), `--payment` |
+| `research-element` | `actions/research-element` | `--cardid` (required), `--element` (required) |
+| `research-spell` | `actions/research-spell` | `--cardid` (required), `--element-card` |
+| `heal-with-focus` | `actions/heal-with-focus` | `--cardid` (required), `--support` (with `--support-domain`), `--payment` |
+| `end-turn` | `actions/end-turn` | None |
+| `maintenance` | `choices/<choiceid>/maintenance` | `--keep`, `--payment` |
+| `kneel` | `choices/<choiceid>/kneel` | `--kneel=true` or `--kneel=false` (required) |
+| `resolve-effect` | `choices/<choiceid>/resolve-effect` | `--effectid` (required) |
+| `skip-effect` | `choices/<choiceid>/skip-effect` | `--effectid` (required) |
+| `undertake-hunt` | `choices/<choiceid>/undertake-hunt` | `--effectid` (required), `--minion`, `--support` (with `--support-domain`), `--payment` |
+| `choose-research` | `choices/<choiceid>/research` | `--designid` (required) |
+| `end-discard` | `choices/<choiceid>/end-discard` | `--discard` |
+| `hand-discard` | `choices/<choiceid>/hand-discard` | `--cardid` (required), `--disposition` (required) |
+| `asset-loss` | `choices/<choiceid>/asset-loss` | `--cardid` (required) |
+| `scry` | `choices/<choiceid>/scry` | `--take` (required), `--order` |
+| `react` | `reactions/play-card` | `--cardid` (required), `--target`, `--support` (with `--support-domain`), `--payment` |
+| `defend` | `reactions/defend` | `--minion`, `--support` (with `--support-domain`) |
+| `pass` | `reactions/pass` | None |
+
+`--target`, `--minion`, `--support`, `--support-domain`, `--payment`, `--discard`,
+`--keep`, `--element-card`, and `--order` are repeatable wherever listed. Order is
+preserved. Omit a repeatable flag for a valid empty selection. End-discard sends
+`--discard` values as `cards`. Research Spell sends supporting Element-card
+instance IDs from `--element-card` as `elements`. Focus healing supports a second
+Focus through `--support`. Generic `play-card` excludes Attack, Research, and
+standalone Focus healing. `--kneel=true` and `--kneel=false` are both explicit
+valid choices. Hand-discard requires `--disposition discard` or `destroy`.
+
+All card references are instance IDs except `--designid` for a Research offer.
+Reaction targets identify pending Spell entries for Counterspell or the printed
+Minion targets in an Attack. Effect commands take an unprefixed `--effectid`;
+only `undertake-hunt` carries Full Moon's Challenge commitments.
+
+Pair cards with repeatable `--support CARDID`. Assign domains with repeatable
+`--support-domain CARDID=DOMAIN`; the card must also appear in `--support`.
+For example, Flowing Form takes two different domains on the same support card.
+The CLI checks argument syntax and which fields the command accepts. The server
+checks timing, costs, requirements, and all other game legality.
+
+```sh
+./grimcli attack --token '<token>' --id '<match-id>' \
+  --revision 12 --requestid "$(uuidgen)" --cardid '<attack-instance>' \
+  --minion '<minion-instance>' --support '<focus-instance>'
+
+./grimcli challenge --token '<token>' --id '<match-id>' \
+  --revision 15 --requestid "$(uuidgen)" --cardid '<rumour-instance>' \
+  --challengeid '<printed-challenge-id>' --minion '<minion-instance>' \
+  --support '<flowing-form-instance>' \
+  --support-domain '<flowing-form-instance>=air' \
+  --support-domain '<flowing-form-instance>=water' --payment '<resource-instance>'
+
+./grimcli pass --token '<token>' --id '<match-id>' \
+  --revision 16 --requestid "$(uuidgen)"
+
+./grimcli scry --token '<token>' --id '<match-id>' \
+  --revision 20 --requestid "$(uuidgen)" --choiceid '<scry-choice>' \
+  --take '<take-instance>' --order '<top-instance>' --order '<next-instance>'
+```
+
+`you.userid` identifies the authenticated participant even with an empty hand.
+Use it with `turn.activewizard`, `exchange.priority`, or `choice.actor`. Finished
+matches show `winners` or a draw and accept no new gameplay. A historical receipt
+may predate `you.userid`; fetch a fresh match before deciding what to do next.
+
+The backend and CLI must be deployed together. The old `/commands` and broad
+`/reactions` routes are removed; historical receipts reserve their UUIDs without
+being replayed through new routes. Restart existing wrapper sessions after
+rebuilding `go build -o grimcli .` beside the wrapper. Snapshots, catalogue/rules
+versions, response projections, and the database schema remain unchanged.
+
 ## Interactive sessions
 
-Build the CLI with `go build .`, install `jq` (and `uuidgen` for drafting), and run the Bash wrapper:
+Build the CLI with `go build .`, install `jq` and `uuidgen`, and run the wrapper with Bash 4.4 or newer:
 
 ```sh
 ./grimcli-session.sh
@@ -193,7 +280,7 @@ Build the CLI with `go build .`, install `jq` (and `uuidgen` for drafting), and 
 ./grimcli-session.sh --config /path/to/defaults.json
 ```
 
-The compiled `grimcli` must be beside the script. Config defaults still come
+The compiled `grimcli` and reusable `gameplay-session.sh` helper must be beside `grimcli-session.sh`. Config defaults still come
 from `grimcli.json` in your current working directory. The wrapper prompts for
 an email and a hidden password; leave either field blank to use that field's
 configured default. Fields without defaults require input. If no server is
@@ -221,14 +308,43 @@ other non-open lobbies offer inspection and navigation.
 Launch opens the match screen. During setup, choose **Begin/resume draft** to
 start making picks. Match screens show the name, ID, status, player count, public
 draft-completion count, and your draft progress. Completed drafts display “Draft
-complete; waiting for other players.” Playing matches show “Game started” and
-available turn details; finished matches show the outcome. Every match screen
+complete; waiting for other players.” Playing matches show the revision, phase,
+your identity, each wizard’s resources, Integrity, progress, immunity, table,
+discards, your hand, Stack, and required-input status. The pinned catalogue is
+cached in memory to show names, printed properties, and abilities. Finished
+matches show the outcome and winners or a draw before any input is offered. Every match screen
 offers **Refresh** and **More actions**, containing **Full JSON details** and
 **Catalogue JSON**. On any lobby or match screen, press Enter with no input
 to fetch the latest server data and redraw, or choose **Refresh** explicitly.
 Updates are manual; refresh after another player acts. Whitespace-only input
-keeps its existing behavior. Login, drafting, text-entry, and nested-menu
-prompts are unchanged.
+keeps its existing behavior.
+
+During Actions, your numbered gameplay menu offers card plays (including Attacks
+and Research), Challenges, activations, and End turn. When you hold Priority it
+offers reactions, applicable defensive commitments, and an explicit pass.
+When a choice is pending for you it guides upkeep payments, kneeling, effect
+ordering/skipping, Full Moon’s hunt, Research offers, hand discards/retention,
+destruction alternatives, Asset/Attack losses, or private scrying. Scrying asks
+for an explicit top-first order of every remaining inspected card. Other players
+see who is awaited and can refresh or inspect.
+
+Reusable pickers show printed requirements without filtering by current
+Affinities, since paired support may enable a play. Select numbered cards,
+Minions, domains, targets, payment resources, Research behavior, and discards.
+The chosen card and behavior determine the explicit command before review.
+For multiple selections, numbers toggle entries; ordered selections append in
+the chosen order. Use `d` for **Done**, including valid empty selections. `0` or
+Escape cancels composition. Review the assembled command and choose `s` to send;
+no gameplay requires entering JSON.
+
+Each new gameplay input first fetches current state, captures that revision, and
+generates one UUID. An uncertain submission stays in memory per match, with its
+exact endpoint and arguments, across Back, navigation, and refresh. Its menu offers
+**exact Retry**, **Refresh**, **Discard/rebuild**, and **Back**. Refresh never
+rebases that input. Discard requires typing `discard`, because the original
+request may already have succeeded. After an accepted submission only the
+authoritative match fetch is retried, even if you navigate away. Successful
+account changes and exit clear catalogues and pending gameplay inputs.
 
 Lobby and match selections are independent and kept in memory. Successful creation,
 joining, or detail selection remembers the relevant ID; launch remembers the match.
@@ -273,6 +389,19 @@ The wrapper uses the CLI's existing credential flags; their values may be
 visible in process arguments while a CLI call runs. Lobby actions use the same per-command token and request conventions as
 inspection commands.
 
-Run `bash -n grimcli-session.sh`, `go test -race ./...`, and `go vet ./...` to check
+Run `bash -n grimcli-session.sh gameplay-session.sh`, `go test -race ./...`, and `go vet ./...` to check
 changes. Wrapper tests require Bash and `jq` and use a temporary stub CLI;
 draft tests supply a stub `uuidgen`. They need no running backend.
+
+
+Complete-game integration tests live in the backend repository and are opt-in:
+
+```sh
+go build -o /tmp/grimcli-gameplay .
+cd ../grim
+GRIMCLI_TEST_BINARY=/tmp/grimcli-gameplay go test ./internal/server -run '^TestCLICompleteGames$' -count=1 -v
+```
+
+These tests run a freshly built CLI against production routes on temporary SQLite
+databases through two-, three-, and four-player victories. They require no running
+backend or real accounts. The CLI continues to depend only on the public API package.

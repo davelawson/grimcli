@@ -41,6 +41,9 @@ func execute(ctx context.Context, client *http.Client, o options, out io.Writer)
 	var response, payload any
 	expectedStatus := http.StatusOK
 	switch o.command {
+	case "play-card", "attack", "challenge", "activate", "research-element", "research-spell", "heal-with-focus", "end-turn", "maintenance", "kneel", "resolve-effect", "skip-effect", "undertake-hunt", "choose-research", "end-discard", "hand-discard", "asset-loss", "scry", "react", "defend", "pass":
+		method, response = "POST", &api.MatchResponse{}
+		path, payload = gameplayPayload(o)
 	case "login":
 		payload = api.LoginRequest{Email: o.email, Password: o.password}
 		method, path, response = api.Login.Method, api.Login.Route, &api.LoginResponse{}

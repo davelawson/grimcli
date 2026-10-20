@@ -90,7 +90,11 @@ func newSessionFixture(t *testing.T, configText string) sessionFixture {
 		t.Fatal(err)
 	}
 	f := sessionFixture{dir: dir, script: filepath.Join(binDir, "grimcli-session.sh"), log: filepath.Join(dir, "calls.jsonl")}
-	for path, contents := range map[string][]byte{f.script: source, filepath.Join(binDir, "grimcli"): []byte(sessionStub)} {
+	helper, err := os.ReadFile("gameplay-session.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, contents := range map[string][]byte{filepath.Join(binDir, "gameplay-session.sh"): helper, f.script: source, filepath.Join(binDir, "grimcli"): []byte(sessionStub)} {
 		if err := os.WriteFile(path, contents, 0700); err != nil {
 			t.Fatal(err)
 		}
