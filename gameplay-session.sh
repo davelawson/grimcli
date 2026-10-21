@@ -226,16 +226,23 @@ game_payments() {
 }
 
 game_support() {
-    local context=$1 opts chosen id design domains domain count
+    local context=$1 opts chosen id design domains domain count maximum title
     local -a support_ids
-    if [[ "$context" == defend ]]; then
+    title='Pair support cards (printed requirements apply after Elements and Focus)'
+    if [[ "$context" == research ]]; then
+        opts=$(game_hand_options '.designid == "arcane_focus"')
+        [[ $(jq length <<<"$opts") == 0 ]] && return 0
+        maximum=1
+        title='Pair Arcane Focus (provides 1 Wis; discovery still needs Element cards)'
+    elif [[ "$context" == defend ]]; then
         opts=$(game_hand_options '.designid == "arcane_focus"')
     elif [[ "$context" == challenge ]]; then
         opts=$(game_hand_options '(design(.designid).categories|index("element")) != null or .designid == "arcane_focus" or design(.designid).timing == "support"')
     else
         opts=$(game_hand_options '(design(.designid).categories|index("element")) != null or .designid == "arcane_focus"')
     fi
-    game_pick 'Pair support cards (printed requirements apply after Elements and Focus)' "$opts" 0 "$(jq length <<<"$opts")" || return 1
+    maximum=${maximum:-$(jq length <<<"$opts")}
+    game_pick "$title" "$opts" 0 "$maximum" || return 1
     chosen=$game_selected
     game_append --support
     game_exclude_selected
@@ -344,12 +351,13 @@ game_compose_card() {
         game_minions || return 1
     fi
     case "${game_args[0]}" in
-        research-element) ;;
+        research-element) game_support research || return 1 ;;
         research-spell)
             opts=$(game_hand_options '(design(.designid).categories|index("element")) != null')
             game_pick 'Elements supporting Research (up to two different Elements)' "$opts" 0 2 || return 1
             game_append --element-card
             game_exclude_selected
+            game_support research || return 1
             ;;
         *) game_support "$context" && game_payments || return 1 ;;
     esac

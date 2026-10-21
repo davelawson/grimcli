@@ -121,7 +121,7 @@ func TestGameplayArgumentValidation(t *testing.T) {
 			t.Errorf("accepted %v", flags)
 		}
 	}
-	for _, tc := range []struct{ command, flag string }{{"pass", "cardid"}, {"end-turn", "payment"}, {"activate", "target"}, {"react", "discard"}, {"react", "minion"}, {"defend", "payment"}, {"challenge", "target"}, {"maintenance", "cardid"}, {"research-spell", "support"}, {"research-element", "payment"}, {"resolve-effect", "minion"}, {"skip-effect", "payment"}, {"heal-with-focus", "target"}} {
+	for _, tc := range []struct{ command, flag string }{{"pass", "cardid"}, {"end-turn", "payment"}, {"activate", "target"}, {"react", "discard"}, {"react", "minion"}, {"defend", "payment"}, {"challenge", "target"}, {"maintenance", "cardid"}, {"research-spell", "payment"}, {"research-element", "payment"}, {"resolve-effect", "minion"}, {"skip-effect", "payment"}, {"heal-with-focus", "target"}} {
 		var args []string
 		for _, sample := range gameplayCases() {
 			if sample.command == tc.command {

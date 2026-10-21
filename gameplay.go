@@ -114,12 +114,21 @@ func gameplayFlags(f *flag.FlagSet, o *options) {
 		})
 		repeatFlag(f, "support-domain", &o.supportDomains)
 		repeatFlag(f, "payment", &c.Payment)
-	case "research-element":
+	case "research-element", "research-spell":
 		f.StringVar(&c.CardID, "cardid", "", "Required cardid")
-		f.StringVar(&c.Element, "element", "", "Required element")
-	case "research-spell":
-		f.StringVar(&c.CardID, "cardid", "", "Required cardid")
-		repeatFlag(f, "element-card", &c.Elements)
+		if o.command == "research-element" {
+			f.StringVar(&c.Element, "element", "", "Required element")
+		} else {
+			repeatFlag(f, "element-card", &c.Elements)
+		}
+		f.Func("support", "Paired Focus instance ID (repeatable)", func(s string) error {
+			if strings.TrimSpace(s) == "" {
+				return fmt.Errorf("support card ID must not be blank")
+			}
+			c.Support = append(c.Support, api.CardSupport{CardID: s})
+			return nil
+		})
+		repeatFlag(f, "support-domain", &o.supportDomains)
 	case "heal-with-focus":
 		f.StringVar(&c.CardID, "cardid", "", "Required cardid")
 		f.Func("support", "Paired card instance ID (repeatable)", func(s string) error {
@@ -353,9 +362,9 @@ func gameplayPayload(o options) (string, any) {
 	case "activate":
 		return api.ActivateAbilityPath(o.id), api.ActivateAbilityRequest{RequestID: o.requestID, ExpectedRevision: &o.revision, CardID: c.CardID, AbilityID: c.AbilityID, Support: c.Support, Payment: c.Payment}
 	case "research-element":
-		return api.ResearchElementPath(o.id), api.ResearchElementRequest{RequestID: o.requestID, ExpectedRevision: &o.revision, CardID: c.CardID, Element: c.Element}
+		return api.ResearchElementPath(o.id), api.ResearchElementRequest{RequestID: o.requestID, ExpectedRevision: &o.revision, CardID: c.CardID, Element: c.Element, Support: c.Support}
 	case "research-spell":
-		return api.ResearchSpellPath(o.id), api.ResearchSpellRequest{RequestID: o.requestID, ExpectedRevision: &o.revision, CardID: c.CardID, Elements: c.Elements}
+		return api.ResearchSpellPath(o.id), api.ResearchSpellRequest{RequestID: o.requestID, ExpectedRevision: &o.revision, CardID: c.CardID, Elements: c.Elements, Support: c.Support}
 	case "heal-with-focus":
 		return api.HealWithFocusPath(o.id), api.HealWithFocusRequest{RequestID: o.requestID, ExpectedRevision: &o.revision, CardID: c.CardID, Support: c.Support, Payment: c.Payment}
 	case "end-turn":

@@ -10,12 +10,12 @@ import (
 )
 
 type options struct {
-	gameplay                                                          gameplayInput
-	supportDomains                                                    []string
-	command, server, token, id, email, password, caCert, name, userID string
-	ready                                                             bool
-	choiceType, cardID, requestID                                     string
-	revision                                                          int64
+	gameplay                                                                 gameplayInput
+	supportDomains                                                           []string
+	command, server, token, id, email, password, caCert, name, userID, botID string
+	ready                                                                    bool
+	choiceType, cardID, requestID                                            string
+	revision                                                                 int64
 }
 
 func requiresID(command string) bool {
@@ -23,14 +23,14 @@ func requiresID(command string) bool {
 		return true
 	}
 	switch command {
-	case "draft", "draft-pick", "match", "catalogue", "lobby", "lobby-join", "lobby-ready", "lobby-launch", "lobby-leave", "lobby-remove-user", "lobby-delete":
+	case "draft", "draft-pick", "match", "catalogue", "lobby", "lobby-join", "lobby-ready", "lobby-launch", "lobby-leave", "lobby-remove-user", "lobby-add-bot", "lobby-remove-bot", "lobby-delete":
 		return true
 	}
 	return false
 }
 
 func usage(out io.Writer) {
-	fmt.Fprintln(out, "Usage: grimcli <play-card|attack|challenge|activate|research-element|research-spell|heal-with-focus|end-turn|maintenance|kneel|resolve-effect|skip-effect|undertake-hunt|choose-research|end-discard|hand-discard|asset-loss|scry|react|defend|pass|login|draft|draft-pick|match|catalogue|matches|lobbies|public-lobbies|lobby|lobby-create|lobby-join|lobby-ready|lobby-launch|lobby-leave|lobby-remove-user|lobby-delete> [flags]\nUse grimcli <command> --help for command flags.")
+	fmt.Fprintln(out, "Usage: grimcli <play-card|attack|challenge|activate|research-element|research-spell|heal-with-focus|end-turn|maintenance|kneel|resolve-effect|skip-effect|undertake-hunt|choose-research|end-discard|hand-discard|asset-loss|scry|react|defend|pass|login|draft|draft-pick|match|catalogue|matches|lobbies|public-lobbies|lobby|lobby-create|lobby-join|lobby-ready|lobby-launch|lobby-leave|lobby-remove-user|lobby-add-bot|lobby-remove-bot|lobby-delete> [flags]\nUse grimcli <command> --help for command flags.")
 }
 
 func parse(args []string, diagnostics io.Writer) (o options, help bool, err error) {
@@ -44,7 +44,7 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 	}
 	o.command = args[0]
 	switch o.command {
-	case "play-card", "challenge", "activate", "attack", "research-element", "research-spell", "heal-with-focus", "maintenance", "kneel", "resolve-effect", "skip-effect", "undertake-hunt", "choose-research", "end-discard", "hand-discard", "asset-loss", "scry", "end-turn", "react", "defend", "pass", "login", "draft", "draft-pick", "match", "catalogue", "matches", "lobbies", "public-lobbies", "lobby", "lobby-create", "lobby-join", "lobby-ready", "lobby-launch", "lobby-leave", "lobby-remove-user", "lobby-delete":
+	case "play-card", "challenge", "activate", "attack", "research-element", "research-spell", "heal-with-focus", "maintenance", "kneel", "resolve-effect", "skip-effect", "undertake-hunt", "choose-research", "end-discard", "hand-discard", "asset-loss", "scry", "end-turn", "react", "defend", "pass", "login", "draft", "draft-pick", "match", "catalogue", "matches", "lobbies", "public-lobbies", "lobby", "lobby-create", "lobby-join", "lobby-ready", "lobby-launch", "lobby-leave", "lobby-remove-user", "lobby-add-bot", "lobby-remove-bot", "lobby-delete":
 	default:
 		return o, false, fmt.Errorf("unknown command %q", o.command)
 	}
@@ -77,6 +77,9 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 	}
 	if o.command == "lobby-remove-user" {
 		flags.StringVar(&o.userID, "userid", "", "Required target user ID")
+	}
+	if o.command == "lobby-remove-bot" {
+		flags.StringVar(&o.botID, "botid", "", "Required target bot ID")
 	}
 	if o.command == "lobby-ready" {
 		flags.StringVar(&readyValue, "ready", "", "Required explicit readiness: --ready=true or --ready=false")
@@ -120,6 +123,9 @@ func parse(args []string, diagnostics io.Writer) (o options, help bool, err erro
 	}
 	if o.command == "lobby-remove-user" && strings.TrimSpace(o.userID) == "" {
 		return o, false, fmt.Errorf("--userid is required")
+	}
+	if o.command == "lobby-remove-bot" && strings.TrimSpace(o.botID) == "" {
+		return o, false, fmt.Errorf("--botid is required")
 	}
 	if o.command == "lobby-ready" && (!explicit["ready"] || (readyValue != "true" && readyValue != "false")) {
 		return o, false, fmt.Errorf("--ready=true or --ready=false is required")

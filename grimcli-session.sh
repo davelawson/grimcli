@@ -322,7 +322,8 @@ menu_prompt() {
 
 lobby_details() {
     jq -e '.lobby | .id != null and .status != null and
-        (.members | type) == "array" and (.readiness | type) == "object"' <<<"$1" >/dev/null 2>&1
+        (.members | type) == "array" and (.readiness | type) == "object" and
+        ((.bots // {}) | type) == "object"' <<<"$1" >/dev/null 2>&1
 }
 
 match_details() {
@@ -339,14 +340,17 @@ numbered_id() {
 
 render_lobby() {
     jq -r '.lobby as $l | $l.members as $members |
+        (($l.bots // {}) | to_entries | sort_by(.key)) as $bots |
+        (($members | length) + ($bots | length)) as $total |
         ([$members[] | select($l.readiness[.] == true)] | length) as $ready |
         "\nLobby: \($l.name)", "ID: \($l.id)", "Status: \($l.status)",
-        "Owner ID: \($l.owner)", "Members (\($members | length)/4):",
+        "Owner ID: \($l.owner)", "Players (\($total)/4):",
         ($members[] | "  \(.) — \(if $l.readiness[.] == true then "ready" else "not ready" end)"),
-        "Ready: \($ready)/\($members | length)",
+        ($bots[] | "  \(.value.name) [ID: \(.key)] — bot, always ready"),
+        "Ready: \($ready)/\($members | length) humans",
         (if $l.status == "open" then
-            if ($members | length) < 2 then "Needs more players (2–4 required)."
-            elif ($members | length) > 4 then "Needs 2–4 players to launch."
+            if $total < 2 then "Needs more players (2–4 required)."
+            elif $total > 4 then "Needs 2–4 players to launch."
             elif $ready != ($members | length) then "Waiting for every player to mark ready."
             else "Everyone is ready. The owner can launch the match." end
          elif $l.status == "closed" and (($l.matchid // "") != "") then "This lobby has a match. Open it to continue."
@@ -470,11 +474,53 @@ choose_member() {
     done
 }
 
+# Bot IDs come only from this roster; labels are compared as strings.
+choose_bot() {
+    local details=$1 selected
+    while true; do
+        printf '\nRemove bot (owner only)\n'
+        jq -r '(.lobby.bots // {}) | to_entries | sort_by(.key) | to_entries[] |
+            "\(.key + 1)) \(.value.value.name) [ID: \(.value.key)]"' <<<"$details"
+        printf '0) Back\nq) Quit\n'
+        menu_prompt 'Choose a bot number: ' || return 1
+        [[ "$input" == 0 ]] && return 1
+        selected=$(jq -r --arg number "$input" '(.lobby.bots // {}) | to_entries | sort_by(.key) | to_entries[] |
+            select((.key + 1 | tostring) == $number) | .value.key' <<<"$details")
+        if [[ -n "$selected" ]]; then
+            input=$selected
+            return 0
+        fi
+        printf 'Choose one of the listed bot numbers.\n' >&2
+    done
+}
+
+# Bot mutations are not replayable. Recover an uncertain outcome with GET only.
+change_lobby_bot() {
+    local id=$1
+    shift
+    if response=$("$cli" "$@" "${common_args[@]}" --token "$token"); then
+        printf 'Bot roster updated. Human readiness has been reset.\n'
+    else
+        printf 'Bot change failed; its outcome may be uncertain. Fetching the roster before another action.\n' >&2
+        response=''
+    fi
+    if ! lobby_details "$response"; then
+        request 'Lobby fetch' lobby --id "$id" || return 1
+    fi
+    lobby_details "$response" || { printf 'Lobby response is missing usable details. Reopen the lobby to refresh.\n' >&2; return 1; }
+}
+
 lobby_more() {
     # Return new details through response, or 2 when leaving/deleting sent us Home.
-    local id=$1 details=$2
+    local id=$1 details=$2 can_add can_remove
     while true; do
-        printf '\nLobby — More actions\n1) Leave\n2) Remove member (owner only)\n3) Delete lobby (owner only)\n4) Full JSON details\n0) Back\nq) Quit\n'
+        [[ $(jq -r '.lobby.status' <<<"$details") == open ]] || { response=$details; return 0; }
+        can_add=$(jq -r '.lobby | ((.members | length) + ((.bots // {}) | length)) < 4' <<<"$details")
+        can_remove=$(jq -r '((.lobby.bots // {}) | length) > 0' <<<"$details")
+        printf '\nLobby — More actions\n1) Leave\n2) Remove member (owner only)\n3) Delete lobby (owner only)\n4) Full JSON details\n'
+        [[ "$can_add" == true ]] && printf '5) Add bot (owner only)\n'
+        [[ "$can_remove" == true ]] && printf '6) Remove bot (owner only)\n'
+        printf '0) Back\nq) Quit\n'
         menu_prompt 'Choose an action: ' || { response=$details; return 0; }
         case "$input" in
             1|3)
@@ -495,6 +541,17 @@ lobby_more() {
                 fi
                 ;;
             4) printf '%s\n' "$details" ;;
+            5)
+                [[ "$can_add" == true ]] || { printf 'Choose one of the listed actions.\n' >&2; continue; }
+                change_lobby_bot "$id" lobby-add-bot --id "$id" || return 1
+                return 0
+                ;;
+            6)
+                [[ "$can_remove" == true ]] || { printf 'Choose one of the listed actions.\n' >&2; continue; }
+                choose_bot "$details" || continue
+                change_lobby_bot "$id" lobby-remove-bot --id "$id" --botid "$input" || return 1
+                return 0
+                ;;
             0) response=$details; return 0 ;;
             *) printf 'Choose one of the listed actions.\n' >&2 ;;
         esac
@@ -514,7 +571,7 @@ lobby_screen() {
         linked_match=$(jq -r '.lobby.matchid // empty' <<<"$details")
         can_launch=false
         if [[ "$status" == open ]]; then
-            can_launch=$(jq -r '.lobby | . as $l | (.members | length) as $n |
+            can_launch=$(jq -r '.lobby | . as $l | ((.members | length) + ((.bots // {}) | length)) as $n |
                 $n >= 2 and $n <= 4 and all(.members[]; $l.readiness[.] == true)' <<<"$details")
             printf '1) Mark me ready\n2) Mark me unready\n3) Refresh (Enter)\n4) More actions\n'
             [[ "$can_launch" == true ]] && printf '5) Launch match (owner only)\n'

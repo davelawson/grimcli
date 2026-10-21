@@ -67,6 +67,11 @@ func execute(ctx context.Context, client *http.Client, o options, out io.Writer)
 		payload = api.CreateLobbyRequest{Name: o.name}
 	case "lobby-join":
 		method, path, response = api.JoinLobby.Method, api.JoinLobbyPath(o.id), &api.GetLobbyResponse{}
+	case "lobby-add-bot":
+		method, path, response = api.AddBotToLobby.Method, api.AddBotToLobbyPath(o.id), &api.GetLobbyResponse{}
+		expectedStatus = http.StatusCreated
+	case "lobby-remove-bot":
+		method, path, response = api.RemoveBotFromLobby.Method, api.RemoveBotFromLobbyPath(o.id, o.botID), &api.GetLobbyResponse{}
 	case "lobby-ready":
 		method, path, response = api.SetReady.Method, api.SetReadyPath(o.id), &api.GetLobbyResponse{}
 		payload = api.ReadyRequest{Ready: &o.ready}

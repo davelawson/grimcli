@@ -23,6 +23,8 @@ func TestLobbyCommands(t *testing.T) {
 		{"lobby", "GET", "/lobby/" + url.PathEscape(id), "", `{"lobby":{"id":"lobby-id"}}`, 200, []string{"--id", id}},
 		{"lobby-create", "POST", "/lobby", `{"name":"Friday game"}`, `{"id":"new-id"}`, 200, []string{"--name", "Friday game"}},
 		{"lobby-join", "POST", "/lobby/" + url.PathEscape(id) + "/join", "", `{"lobby":{"id":"joined-id"}}`, 200, []string{"--id", id}},
+		{"lobby-add-bot", "POST", "/lobby/" + url.PathEscape(id) + "/bot", "", `{"lobby":{"id":"lobby-id","bots":{"bot-one":{"name":"Bot 1"}}}}`, 201, []string{"--id", id}},
+		{"lobby-remove-bot", "DELETE", "/lobby/" + url.PathEscape(id) + "/bot/" + url.PathEscape(user), "", `{"lobby":{"id":"lobby-id"}}`, 200, []string{"--id", id, "--botid", user}},
 		{"lobby-ready", "PUT", "/lobby/" + url.PathEscape(id) + "/ready", `{"ready":true}`, `{"lobby":{"id":"lobby-id"}}`, 200, []string{"--id", id, "--ready=true"}},
 		{"lobby-ready", "PUT", "/lobby/" + url.PathEscape(id) + "/ready", `{"ready":false}`, `{"lobby":{"id":"lobby-id"}}`, 200, []string{"--id", id, "--ready=false"}},
 		{"lobby-launch", "POST", "/lobby/" + url.PathEscape(id) + "/launch", `{"requestid":"` + id + `"}`, `{"match":{"id":"match-id"}}`, 201, []string{"--id", id}},
@@ -66,6 +68,13 @@ func TestLobbyCommands(t *testing.T) {
 			}
 			json.Unmarshal([]byte(tc.response), &want)
 			for key, val := range want { // Typed envelopes may include additional zero-value fields.
+				if key == "lobby" {
+					gotLobby := got[key].(map[string]any)
+					wantLobby := val.(map[string]any)
+					if !reflect.DeepEqual(gotLobby["bots"], wantLobby["bots"]) {
+						t.Fatalf("bots changed: %v", gotLobby)
+					}
+				}
 				if key == "lobbies" || key == "id" {
 					if !reflect.DeepEqual(got[key], val) {
 						t.Fatal(got)
@@ -84,6 +93,9 @@ func TestLobbyArgumentValidation(t *testing.T) {
 	for _, flags := range [][]string{
 		{"lobby"}, {"lobby-create"}, {"lobby-create", "--name", " "}, {"lobby-join"}, {"lobby-ready", "--id", "id"},
 		{"lobby-ready", "--id", "id", "--ready"}, {"lobby-ready", "--id", "id", "--ready=maybe"}, {"lobby-ready", "--id", "id", "--ready=1"},
+		{"lobby-add-bot"}, {"lobby-add-bot", "--id", " "}, {"lobby-add-bot", "--id", "id", "--botid", "bot"},
+		{"lobby-remove-bot"}, {"lobby-remove-bot", "--id", "id"}, {"lobby-remove-bot", "--botid", "bot"},
+		{"lobby-remove-bot", "--id", "id", "--botid", " "}, {"lobby-remove-bot", "--id", "id", "--userid", "bot"},
 		{"lobby-launch"}, {"lobby-leave"}, {"lobby-delete"}, {"lobby-remove-user", "--id", "id"}, {"lobby-remove-user", "--userid", "user"},
 		{"public-lobbies", "--id", "id"}, {"lobby-leave", "--id", "id", "--userid", "user"},
 	} {
@@ -92,7 +104,7 @@ func TestLobbyArgumentValidation(t *testing.T) {
 			t.Errorf("accepted %q", args)
 		}
 	}
-	for _, command := range []string{"public-lobbies", "lobby", "lobby-create", "lobby-join", "lobby-ready", "lobby-launch", "lobby-leave", "lobby-remove-user", "lobby-delete"} {
+	for _, command := range []string{"public-lobbies", "lobby", "lobby-create", "lobby-join", "lobby-ready", "lobby-launch", "lobby-leave", "lobby-remove-user", "lobby-add-bot", "lobby-remove-bot", "lobby-delete"} {
 		if code, _, _ := invoke(command, "--server", server.URL); code != 2 {
 			t.Error("missing token accepted")
 		}
@@ -114,6 +126,12 @@ func TestLobbyResponseFailures(t *testing.T) {
 	}{
 		{"lobby-create", 200, `{}`}, {"lobby", 200, `{}`}, {"lobby", 200, `{"lobby":null}`}, {"lobby-join", 200, `{"lobby":{}}`},
 		{"lobby-ready", 200, `{"lobby":{"id":"id"}} {}`}, {"lobby-launch", 201, `{"match":{}}`}, {"lobby-launch", 200, `{"match":{"id":"id"}}`},
+		{"lobby-add-bot", 200, `{"lobby":{"id":"id"}}`}, {"lobby-add-bot", 201, `{}`},
+		{"lobby-add-bot", 201, `{"lobby":null}`}, {"lobby-add-bot", 201, `{"lobby":{"id":"id"}} {}`},
+		{"lobby-add-bot", 409, `{"error":{"code":"lobby_full","message":"Full"}}`},
+		{"lobby-remove-bot", 201, `{"lobby":{"id":"id"}}`}, {"lobby-remove-bot", 200, `{"lobby":{}}`},
+		{"lobby-remove-bot", 403, `{"error":{"code":"forbidden","message":"Denied"}}`},
+		{"lobby-remove-bot", 404, `{"error":{"code":"not_found","message":"Missing"}}`},
 		{"public-lobbies", 200, `{}`}, {"public-lobbies", 200, `{"lobbies":[{}]}`}, {"lobby", 200, `{`},
 		{"lobby-leave", 409, `{"error":{"code":"owner_must_transfer","message":"Transfer ownership"}}`},
 		{"lobby-delete", 404, "legacy text error"}, {"lobby-remove-user", 403, `{"error":{"code":"forbidden","message":"Denied"}}`},
@@ -128,6 +146,8 @@ func TestLobbyResponseFailures(t *testing.T) {
 			args = append(args, "--name", "name")
 		case "lobby-ready":
 			args = append(args, "--ready=false")
+		case "lobby-remove-bot":
+			args = append(args, "--botid", "bot")
 		case "lobby-remove-user":
 			args = append(args, "--userid", "user")
 		}
@@ -136,7 +156,7 @@ func TestLobbyResponseFailures(t *testing.T) {
 		if code != 1 || out != "" {
 			t.Errorf("accepted %s %s", tc.command, tc.body)
 		}
-		if tc.status == 409 && !strings.Contains(diagnostics, "owner_must_transfer: Transfer ownership") {
+		if tc.command == "lobby-leave" && tc.status == 409 && !strings.Contains(diagnostics, "owner_must_transfer: Transfer ownership") {
 			t.Error(diagnostics)
 		}
 	}

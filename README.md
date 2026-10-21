@@ -19,6 +19,11 @@ go vet ./...
 
 Start the backend separately using its README instructions. This CLI imports
 only `github.com/davelawson/grim/api` and does not access the backend database.
+The backend's shared card catalogue is stored in its `card_designs` table;
+install it using the backend's additive SQL script before upgrading the server.
+`GRIM_CATALOGUE_VERSION` selects the backend catalogue for new matches; existing
+matches retain their own version. The CLI obtains definitions through the match
+catalogue endpoint, with no command or payload changes.
 
 Once the backend's `v0.1.0` release is published, switch to it:
 
@@ -126,21 +131,31 @@ server, certificate, and config defaults.
 | `lobby` | `--id '<lobby-id>'` | Member-only lobby details |
 | `lobby-create` | `--name 'Friday game'` | Public lobby ID; creator becomes owner/member |
 | `lobby-join` | `--id '<lobby-id>'` | Join as the token's user; returns lobby |
+| `lobby-add-bot` | `--id '<lobby-id>'` | Owner adds one bot; returns lobby with status 201 |
+| `lobby-remove-bot` | `--id '<lobby-id>' --botid '<bot-id>'` | Owner removes a bot; returns updated lobby |
 | `lobby-ready` | `--id '<lobby-id>' --ready=true` or `--ready=false` | Set own readiness; returns lobby |
 | `lobby-launch` | `--id '<lobby-id>'` | Owner launches; returns match with status 201 |
 | `lobby-leave` | `--id '<lobby-id>'` | Self-departure, no response body |
 | `lobby-remove-user` | `--id '<lobby-id>' --userid '<user-id>'` | Explicit-target removal, no response body |
 | `lobby-delete` | `--id '<lobby-id>'` | Delete owned open lobby, no response body |
 
-Responses print as indented JSON envelopes. Leave, removal, and deletion print
-nothing on success. `--ready` requires an explicit `true` or `false` value.
+Responses print as indented JSON envelopes. Leave, human removal, and lobby
+deletion print nothing on success. `--ready` requires an explicit `true` or `false` value.
 Launch always sends the lobby ID as `requestid`; retry the same command after a
 lost response without generating or storing another UUID.
 
-Lobbies hold at most four members, and each user may belong to one open lobby.
-Roster changes reset everyone's readiness. Launch requires the owner and two
-to four ready members. Owners must transfer ownership through the backend API
-or delete their open lobby before leaving. Closed lobbies reject changes.
+Lobbies hold at most four participants, counting humans and bots, and each user
+may belong to one open lobby. Owners can add one server-named bot per command
+or remove one using its ID from the returned `lobby.bots` map. Bots have no user
+accounts or login tokens and are always ready. Roster changes reset all human
+readiness. Launch requires two to four participants and every human ready;
+one human can play against one to three bots. Owners must transfer ownership
+through the backend API or delete their open lobby before leaving. Closed
+lobbies reject changes.
+
+Each successful `lobby-add-bot` invocation creates a new bot. If its response is
+lost or fails to decode, fetch `lobby --id '<lobby-id>'` and inspect the roster
+before deciding whether to add another bot. Bot mutations have no replay key.
 
 ## Drafting
 
@@ -201,8 +216,8 @@ or generic `choose` command; drafting retains its existing `--type`.
 | `attack` | `actions/attack` | `--cardid` (required), `--minion` (required), `--support` (with `--support-domain`), `--payment` |
 | `challenge` | `actions/attempt-challenge` | `--cardid` (required), `--challengeid` (required), `--minion`, `--support` (with `--support-domain`), `--payment` |
 | `activate` | `actions/activate-ability` | `--cardid` (required), `--abilityid` (required), `--support` (with `--support-domain`), `--payment` |
-| `research-element` | `actions/research-element` | `--cardid` (required), `--element` (required) |
-| `research-spell` | `actions/research-spell` | `--cardid` (required), `--element-card` |
+| `research-element` | `actions/research-element` | `--cardid` (required), `--element` (required), `--support` (with `--support-domain`) |
+| `research-spell` | `actions/research-spell` | `--cardid` (required), `--element-card`, `--support` (with `--support-domain`) |
 | `heal-with-focus` | `actions/heal-with-focus` | `--cardid` (required), `--support` (with `--support-domain`), `--payment` |
 | `end-turn` | `actions/end-turn` | None |
 | `maintenance` | `choices/<choiceid>/maintenance` | `--keep`, `--payment` |
@@ -223,8 +238,11 @@ or generic `choose` command; drafting retains its existing `--type`.
 `--keep`, `--element-card`, and `--order` are repeatable wherever listed. Order is
 preserved. Omit a repeatable flag for a valid empty selection. End-discard sends
 `--discard` values as `cards`. Research Spell sends supporting Element-card
-instance IDs from `--element-card` as `elements`. Focus healing supports a second
-Focus through `--support`. Generic `play-card` excludes Attack, Research, and
+instance IDs from `--element-card` as `elements`. Both Research modes can pair one
+Arcane Focus using `--support '<focus-instance>' --support-domain '<focus-instance>=water'`
+(or another chosen Affinity). Focus covers Research's 1 Wis cost even with no Wis
+available. It does not substitute for Element-card inputs or change the discovery
+pool. Focus healing supports a second Focus through `--support`. Generic `play-card` excludes Attack, Research, and
 standalone Focus healing. `--kneel=true` and `--kneel=false` are both explicit
 valid choices. Hand-discard requires `--disposition discard` or `destroy`.
 
@@ -295,13 +313,21 @@ with IDs and statuses. Each list offers `r` or Enter with no input to **Refresh*
 `m` to **Enter ID manually**, and `0` to go **Back**. Membership lists also offer
 `s` to reopen the last successful selection. Empty lists explain how to continue.
 
-Lobby screens show the name, ID, status, owner ID, member IDs, individual readiness,
-and ready count. Open lobbies offer **Mark me ready**, **Mark me unready**, **Refresh**,
-and **More actions**. With two to four members and everyone ready, **Launch match
+Lobby screens show the name, ID, status, owner ID, total occupancy, human IDs and
+readiness, and bot names and IDs. Bots are labeled always ready; the ready count
+is for humans. Open lobbies offer **Mark me ready**, **Mark me unready**, **Refresh**,
+and **More actions**. With two to four participants and all humans ready, **Launch match
 (owner only)** becomes available. The API does not identify your roster entry, so
 both readiness actions remain visible and the server authorizes owner actions.
 More actions offers **Leave**, **Remove member (owner only)** using a numbered
-roster, **Delete lobby (owner only)**, and **Full JSON details**. Successful leave
+human roster, **Delete lobby (owner only)**, and **Full JSON details**. It also
+provides **Add bot (owner only)** when seats are available and **Remove bot
+(owner only)** when bots exist. Removal uses a numbered bot roster sorted by ID;
+Back or Escape cancels selection. Bot changes return to the lobby screen with
+updated occupancy and reset human readiness. If a bot command fails, the wrapper
+fetches the current roster before allowing another action; retries repeat only
+the fetch. Cancelling recovery or receiving unusable details leaves the lobby
+screen so stale details cannot be used for another mutation. Successful leave
 or deletion returns Home. Closed lobbies with a match ID offer **Open match**;
 other non-open lobbies offer inspection and navigation.
 
@@ -331,7 +357,10 @@ see who is awaited and can refresh or inspect.
 Reusable pickers show printed requirements without filtering by current
 Affinities, since paired support may enable a play. Select numbered cards,
 Minions, domains, targets, payment resources, Research behavior, and discards.
-The chosen card and behavior determine the explicit command before review.
+Both Research modes offer an optional Arcane Focus picker when one is in hand,
+followed by its chosen Affinity. Discovery selects its Element inputs separately;
+Focus supplies payment without selecting a pool. The chosen card and behavior
+determine the explicit command before review.
 For multiple selections, numbers toggle entries; ordered selections append in
 the chosen order. Use `d` for **Done**, including valid empty selections. `0` or
 Escape cancels composition. Review the assembled command and choose `s` to send;

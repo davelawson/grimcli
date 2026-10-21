@@ -542,11 +542,15 @@ func TestSessionFullLobbyDraftJourneys(t *testing.T) {
 func TestSessionReadinessAndLaunchAvailability(t *testing.T) {
 	for _, tc := range []struct {
 		name             string
-		members          int
+		members, bots    int
 		ready, canLaunch bool
 	}{
-		{"needs players", 1, true, false}, {"needs readiness", 2, false, false},
-		{"two ready", 2, true, true}, {"four ready", 4, true, true}, {"too many", 5, true, false},
+		{"needs players", 1, 0, true, false}, {"needs readiness", 2, 0, false, false},
+		{"two ready", 2, 0, true, true}, {"four ready", 4, 0, true, true}, {"too many", 5, 0, true, false},
+		{"solo with one bot", 1, 1, true, true}, {"solo with two bots", 1, 2, true, true},
+		{"solo with three bots", 1, 3, true, true}, {"solo unready", 1, 1, false, false},
+		{"mixed ready", 2, 2, true, true}, {"mixed unready", 2, 2, false, false},
+		{"bots over capacity", 2, 3, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newSessionFixture(t, sessionConfig)
@@ -557,7 +561,11 @@ func TestSessionReadinessAndLaunchAvailability(t *testing.T) {
 				members = append(members, id)
 				readiness[id] = tc.ready
 			}
-			data, _ := json.Marshal(map[string]any{"lobby": map[string]any{"id": "lobby-one", "name": "Friday", "owner": "a", "status": "open", "members": members, "readiness": readiness}})
+			bots := map[string]any{}
+			for i := 0; i < tc.bots; i++ {
+				bots["bot-"+string(rune('a'+i))] = map[string]string{"name": "Bot"}
+			}
+			data, _ := json.Marshal(map[string]any{"lobby": map[string]any{"id": "lobby-one", "name": "Friday", "owner": "a", "status": "open", "members": members, "readiness": readiness, "bots": bots}})
 			cmd, out := f.command(t, "\n\n3\n1\n0\n0\nq\n")
 			f.replies(t, cmd, map[string][]sessionReply{"lobby": {{Body: string(data)}}})
 			runSession(t, cmd, out)
